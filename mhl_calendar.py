@@ -166,6 +166,14 @@ def _norm_division(value: str) -> str:
     return v
 
 
+def div_key(div: str):
+    """ディビジョンをリーグの格付け順に並べるためのキー。未知（旧期等）は末尾。"""
+    try:
+        return (0, KNOWN_DIVISIONS.index(div))
+    except ValueError:
+        return (1, 0, div)
+
+
 def parse_schedule(html: str, source: str) -> list[Event]:
     """1 つのスケジュールファイルからイベント一覧を取り出す。"""
     events: list[Event] = []
@@ -728,7 +736,7 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
         return _h.escape(s)
 
     # 階層: 試合 → ディビジョン → チーム ／ 公式イベント → 種類 ／ 非公式・個人イベント → ラベル
-    div_names = sorted({r["dv"] for r in rows if r["dv"]})
+    div_names = sorted({r["dv"] for r in rows if r["dv"]}, key=div_key)
     months = sorted({r["d"][:7] for r in rows})
     team_by_div: dict[str, set[str]] = {}
     for r in rows:
@@ -888,7 +896,7 @@ def build_calendars(events: list[Event]) -> list[CalSpec]:
 
     specs: list[CalSpec] = [CalSpec("all.ics", "MHL 全試合", matches, "overview")]
 
-    for div in sorted({e.division for e in matches if e.division}):
+    for div in sorted({e.division for e in matches if e.division}, key=div_key):
         specs.append(CalSpec(
             f"{slug(div)}.ics", f"MHL {div}",
             [e for e in matches if e.division == div], "division", div,
