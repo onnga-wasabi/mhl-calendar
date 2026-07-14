@@ -536,6 +536,7 @@ table#sched{border-collapse:collapse;width:100%;font-size:.88rem}
 .chip:has(input:checked){background:var(--accent);color:#fff;border-color:var(--accent)}
 .chip input{margin:0}
 .frow{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+.frow .hint{font-size:.78rem;color:var(--muted)}
 .frow select,.frow input[type=text]{font:inherit;font-size:.85rem;padding:.35rem .55rem;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
 .cat{border:1px solid var(--line);border-radius:10px;margin:.5rem 0;background:var(--bg)}
 .cat>summary{cursor:pointer;font-weight:700;padding:.6rem .8rem;display:flex;align-items:center;gap:.5rem;list-style:none}
@@ -790,9 +791,12 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
       <span class="count">{len(event_types)}種類</span></summary>
     <div class="catbody chips" id="g-events">{event_chips}</div>
   </details>{rent_cat}
-  <div class="fgroup viewopts"><div class="flabel">表示オプション（購読には影響しません）</div>
+  <div class="fgroup"><div class="frow">
+    <label class="chip"><input type="checkbox" id="c-hide"> 延期の試合を除く</label>
+    <span class="hint">（購読にも反映されます）</span>
+  </div></div>
+  <div class="fgroup viewopts"><div class="flabel">表示オプション（表の閲覧用・購読には影響しません）</div>
     <div class="frow">
-      <label class="chip"><input type="checkbox" id="c-hide"> 延期を隠す</label>
       <select id="f-month"><option value="">全期間</option>{month_opts}</select>
       <input type="text" id="f-kw" placeholder="キーワード">
       <button type="button" class="reset" id="f-reset">すべてクリア</button>
@@ -808,8 +812,8 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
     if feed_url:
         subscribe_panel = f"""
 <h2 class="sec">選択した内容を Google カレンダーに購読</h2>
-<p class="sub">上でチェックした<b>チーム・公式イベント・非公式/個人イベント・延期</b>がそのまま1本のURLになります
-（月・キーワードは表の閲覧用で購読には反映されません）。何も選ばなければ全部です。</p>
+<p class="sub">上でチェックした<b>チーム・公式イベント・非公式/個人イベント</b>と<b>「延期の試合を除く」</b>がそのまま1本のURLになります。
+<b>月・キーワードは表の閲覧用</b>で購読には反映されません。何も選ばなければ全部です。</p>
 <div class="subbox">
   <code id="feedurl"></code>
   <div class="subbtns">
