@@ -2,7 +2,7 @@ name: Build & publish MHL calendars
 
 on:
   schedule:
-    - cron: "17 */6 * * *"   # 6時間ごと（UTC）。サイト更新に追従する
+    - cron: "17 */2 * * *"   # 2時間ごと（UTC）。サイト更新に追従する
   workflow_dispatch: {}       # 手動実行も可
   push:
     branches: [main]

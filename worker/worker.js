@@ -36,9 +36,9 @@ export default {
     }
 
     const feedUrl = (env && env.FEED_JSON) || DEFAULT_FEED;
-    // feed.json をエッジで最大30分キャッシュ（Pages への負荷を抑える）
+    // feed.json をエッジで最大15分キャッシュ（Pages への負荷を抑えつつ追従を速く）
     const res = await fetch(feedUrl, {
-      cf: { cacheTtl: 1800, cacheEverything: true },
+      cf: { cacheTtl: 900, cacheEverything: true },
     });
     if (!res.ok) return new Response("feed unavailable", { status: 502 });
     const feed = await res.json();
@@ -77,7 +77,7 @@ export default {
       headers: {
         "content-type": "text/calendar; charset=utf-8",
         "content-disposition": 'inline; filename="mhl.ics"',
-        "cache-control": "public, max-age=1800",
+        "cache-control": "public, max-age=900",
         "access-control-allow-origin": "*",
       },
     });
