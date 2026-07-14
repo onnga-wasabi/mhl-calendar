@@ -1,0 +1,5 @@
+# 生成物（Actions が site/ に、ローカル実行が calendars/ に出力する）
+/calendars/
+/site/
+__pycache__/
+*.pyc
