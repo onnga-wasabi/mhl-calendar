@@ -330,8 +330,12 @@ h1{font-size:1.5rem;margin:0 0 .3rem}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1rem 1.1rem;margin:.6rem 0;display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
 .card .name{font-weight:600;flex:1;min-width:9rem}
 .card .count{color:var(--muted);font-size:.85rem}
-.card a{text-decoration:none;font-size:.85rem;font-weight:600;padding:.45rem .8rem;border-radius:8px;border:1px solid var(--accent);color:var(--accent);white-space:nowrap}
-.card a:hover{background:var(--accent);color:#fff}
+.card .gcal,.card .copy{text-decoration:none;font-size:.82rem;font-weight:600;padding:.45rem .8rem;border-radius:8px;white-space:nowrap;cursor:pointer;font-family:inherit}
+.card .gcal{background:var(--accent);color:#fff;border:1px solid var(--accent)}
+.card .gcal:hover{opacity:.85}
+.card .copy{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+.card .copy:hover{background:var(--accent);color:#fff}
+.card .copy.done{background:var(--accent);color:#fff}
 .sec{font-size:1.05rem;margin:2.2rem 0 .4rem;padding-bottom:.3rem;border-bottom:2px solid var(--accent)}
 details{background:var(--card);border:1px solid var(--line);border-radius:12px;margin:.6rem 0;padding:.2rem .4rem}
 details>summary{cursor:pointer;font-weight:600;padding:.7rem}
@@ -341,6 +345,7 @@ details .card:last-child{border-bottom:none}
 .how{margin-top:2.5rem;font-size:.9rem;color:var(--muted)}
 .how code{background:var(--line);padding:.1rem .35rem;border-radius:4px;font-size:.85em}
 .how ol{padding-left:1.2rem}
+.how .note{margin-top:1rem;padding:.8rem 1rem;background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px}
 .foot{margin-top:2rem;font-size:.8rem;color:var(--muted)}
 .foot a{color:var(--accent)}
 """
@@ -356,10 +361,14 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
 
     def card(spec: CalSpec) -> str:
         url = link(spec.filename)
+        # cid= による「URLで追加（購読）」ディープリンク。ダウンロードは発生しない。
+        gcal = "https://calendar.google.com/calendar/render?cid=" + urllib.parse.quote(url, safe="")
         return (
             f'<div class="card"><span class="name">{_h.escape(spec.name)}</span>'
             f'<span class="count">{len(spec.events)} 件</span>'
-            f'<a href="{_h.escape(url)}">購読URLをコピー</a></div>'
+            f'<a class="gcal" href="{_h.escape(gcal)}" target="_blank" rel="noopener">Googleに追加</a>'
+            f'<button class="copy" type="button" data-url="{_h.escape(url)}">URLをコピー</button>'
+            f"</div>"
         )
 
     overview = [s for s in specs if s.category in ("overview", "events")]
@@ -392,19 +401,30 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
 <body><div class="wrap">
 <h1>MHL スケジュール カレンダー</h1>
 <p class="sub">Misconduct Hockey League {season_no}期 / 最終更新 {stamp}<br>
-購読したい単位（全試合・ディビジョン・チーム・イベント）のURLを Google カレンダーに登録してください。</p>
+購読したい単位（全試合・ディビジョン・チーム・イベント）を Google カレンダーに<b>URLで追加</b>してください。自動で最新に追従します。</p>
 {''.join(sections)}
-<div class="how"><h2 style="font-size:1rem;color:var(--fg)">Google カレンダーへの登録方法</h2>
-<ol>
-<li>上のボタンを右クリック→リンクをコピー、または開いてURLを控える</li>
-<li>Google カレンダー左側「他のカレンダー」＋ →「<b>URLで追加</b>」</li>
-<li>コピーしたURLを貼り付けて「カレンダーを追加」</li>
-</ol>
-<p>サイト側の更新に自動追従します（Google 側の反映は数時間〜1日ほど遅れます）。
-延期になった試合はタイトル先頭に <b>⚠※延期</b> が付きます。</p></div>
+<div class="how"><h2 style="font-size:1rem;color:var(--fg)">登録方法（どちらもURL購読＝自動更新）</h2>
+<p><b>かんたん:</b>「<b>Googleに追加</b>」を押すと Google カレンダーが開き、そのまま追加できます。</p>
+<p><b>手動:</b>「URLをコピー」を押す → Google カレンダー左側「他のカレンダー ＋」→「<b>URLで追加</b>」→ 貼り付けて追加。</p>
+<p class="note">※「ダウンロード → インポート」はしないでください。インポートはその時点のコピーで<b>更新されません</b>。
+かならず<b>URLで追加（購読）</b>で登録してください。<br>
+サイト更新への反映は Google 側の都合で数時間〜1日ほど遅れます。延期の試合はタイトル先頭に <b>⚠※延期</b> が付きます。</p></div>
 <p class="foot">データ元: <a href="{_h.escape(BASE)}">misconduct.co.jp</a>
 （非公式・個人利用向けの変換ツールです）</p>
-</div></body></html>"""
+</div>
+<script>
+document.querySelectorAll('button.copy').forEach(function(b){{
+  b.addEventListener('click',function(){{
+    var url=b.dataset.url, label=b.textContent;
+    function done(){{ b.textContent='✓ コピーしました'; b.classList.add('done');
+      setTimeout(function(){{ b.textContent=label; b.classList.remove('done'); }},1500); }}
+    if(navigator.clipboard&&navigator.clipboard.writeText){{
+      navigator.clipboard.writeText(url).then(done,function(){{ window.prompt('このURLをコピーしてください',url); }});
+    }} else {{ window.prompt('このURLをコピーしてください',url); }}
+  }});
+}});
+</script>
+</body></html>"""
     (out / "index.html").write_text(body, encoding="utf-8")
 
 
