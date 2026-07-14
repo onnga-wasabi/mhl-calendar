@@ -43,6 +43,26 @@ KNOWN_DIVISIONS = [
 PROGRAM_NOISE = {"時間調整", "MHL開催なし", "MHL 開催なし", ""}
 
 
+def event_type(title: str) -> str:
+    """公式イベント（プログラム）名を「種類」に束ねる。未分類は名前そのまま。"""
+    t = title.lower()
+    if "pick up" in t:
+        return "Pick Up Hockey"
+    if "drop in" in t:
+        return "Drop in Hockey"
+    if "open skate" in t:
+        return "Open Skate"
+    if "clinic" in t or "クリニック" in title:
+        return "クリニック"
+    if "エキシビション" in title or "exhibition" in t:
+        return "エキシビションゲーム"
+    if "親子" in title:
+        return "親子スケート"
+    if "ハピホケ" in title or "happy hockey" in t:
+        return "ハピホケ"
+    return title
+
+
 # ---------------------------------------------------------------------------
 # HTML → 10 列グリッド
 # ---------------------------------------------------------------------------
@@ -382,10 +402,24 @@ table#sched{border-collapse:collapse;width:100%;font-size:.88rem}
 .chip input{margin:0}
 .frow{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
 .frow select,.frow input[type=text]{font:inherit;font-size:.85rem;padding:.35rem .55rem;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
-details.tg{margin:.25rem 0}
-details.tg>summary{cursor:pointer;font-size:.85rem;font-weight:600;padding:.25rem 0}
-details.tg>summary .count{color:var(--muted);font-weight:400}
-details.tg .chips{padding:.4rem 0 .6rem .6rem}
+.cat{border:1px solid var(--line);border-radius:10px;margin:.5rem 0;background:var(--bg)}
+.cat>summary{cursor:pointer;font-weight:700;padding:.6rem .8rem;display:flex;align-items:center;gap:.5rem;list-style:none}
+.cat>summary::-webkit-details-marker{display:none}
+.cat>summary::before{content:"▸";color:var(--muted);font-weight:400}
+.cat[open]>summary::before{content:"▾"}
+.cat>summary .count{color:var(--muted);font-weight:400;font-size:.8rem}
+.catbody{padding:.2rem .9rem .8rem 1.6rem}
+.cat input[type=checkbox]{width:16px;height:16px;cursor:pointer;flex:0 0 auto}
+details.tg{margin:.15rem 0;border-bottom:1px solid var(--line)}
+details.tg:last-child{border-bottom:none}
+details.tg>summary{cursor:pointer;font-size:.85rem;padding:.35rem 0;display:flex;align-items:center;gap:.4rem;list-style:none}
+details.tg>summary::-webkit-details-marker{display:none}
+details.tg>summary::before{content:"▸";color:var(--muted);font-size:.75rem}
+details.tg[open]>summary::before{content:"▾"}
+details.tg>summary .nm{font-weight:600}
+details.tg>summary .count{color:var(--muted);font-weight:400;font-size:.78rem}
+details.tg .divchk{width:15px;height:15px}
+details.tg .chips{padding:.4rem 0 .6rem 1.4rem}
 .subbox{border:1px solid var(--line);border-radius:12px;padding:.9rem 1rem;background:var(--card);margin:.5rem 0 1rem}
 .subbox code#feedurl{display:block;word-break:break-all;font-size:.82rem;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.6rem .7rem;color:var(--fg);margin-bottom:.7rem}
 .subbtns{display:flex;gap:.6rem;flex-wrap:wrap}
@@ -406,36 +440,38 @@ var WD = ['日','月','火','水','木','金','土'];
 function esc(s){return String(s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
 function wday(d){var p=d.split('-');return new Date(+p[0],+p[1]-1,+p[2]).getDay();}
 function fmtDate(d){var p=d.split('-');return p[1]+'/'+p[2]+' ('+WD[wday(d)]+')';}
-function checkedVals(sel){return Array.prototype.slice.call(document.querySelectorAll(sel))
-  .filter(function(x){return x.checked;}).map(function(x){return x.value;});}
+function qsa(sel){return Array.prototype.slice.call(document.querySelectorAll(sel));}
 
-var gDiv=document.getElementById('g-div'),
-    gTeam=document.getElementById('g-team'),
-    cEvents=document.getElementById('c-events'),
-    cHide=document.getElementById('c-hide'),
+var cHide=document.getElementById('c-hide'),
     fMonth=document.getElementById('f-month'),
     fKw=document.getElementById('f-kw'),
     tbody=document.getElementById('rows'),
     count=document.getElementById('count'),
-    feedEl=document.getElementById('feedurl');
+    feedEl=document.getElementById('feedurl'),
+    allMatches=document.getElementById('all-matches'),
+    allEvents=document.getElementById('all-events');
 
+// ---- 選択状態（購読対象。月・キーワード・延期は含めない）----
 function selection(){
-  return {
-    divs: checkedVals('#g-div input'),
-    teams: checkedVals('#g-team input'),
-    events: cEvents ? cEvents.checked : false,
-    hide: cHide ? cHide.checked : false
-  };
+  var divchk=qsa('#g-matches .divchk');
+  var selDivSet={}; divchk.forEach(function(c){ if(c.checked) selDivSet[c.dataset.div]=1; });
+  var divs=Object.keys(selDivSet);
+  // 部門まるごと選択済みのチームは divs 側に含まれるので teams からは除外
+  var teams=qsa('#g-matches .teamchk')
+    .filter(function(c){return c.checked && !selDivSet[c.dataset.div];})
+    .map(function(c){return c.value;});
+  var et=qsa('#g-events .etchk').filter(function(c){return c.checked;}).map(function(c){return c.value;});
+  var etTotal=qsa('#g-events .etchk').length;
+  return {divs:divs, teams:teams, et:et, allEt:(etTotal>0 && et.length===etTotal),
+          hide:cHide?cHide.checked:false};
 }
 
-// 購読対象（div/team/events/hide のみ。月・キーワードは含めない）に一致するか
 function inSubscription(r, s){
-  var any = s.divs.length || s.teams.length || s.events;
+  var any = s.divs.length || s.teams.length || s.et.length;
   if(!any) return true;                       // 何も選ばなければ全部
-  if(r.k==='p') return s.events;
+  if(r.k==='p') return s.et.indexOf(r.et)>=0;
   if(s.divs.indexOf(r.dv)>=0) return true;
-  if(s.teams.indexOf(r.a)>=0 || s.teams.indexOf(r.h)>=0) return true;
-  return false;
+  return s.teams.indexOf(r.a)>=0 || s.teams.indexOf(r.h)>=0;
 }
 
 function render(){
@@ -450,7 +486,7 @@ function render(){
     n++;
     var badge = r.n ? '<span class="delay">延期</span>' : '';
     var mu = r.k==='p' ? esc(r.a) : esc(r.a)+'<span class="vs">vs</span>'+esc(r.h);
-    var cat = r.k==='p' ? 'イベント' : esc(r.dv);
+    var cat = r.k==='p' ? esc(r.et||'イベント') : esc(r.dv);
     var we = (wday(r.d)===0||wday(r.d)===6) ? ' class="we"' : '';
     html += '<tr'+we+'><td class="dt">'+fmtDate(r.d)+'</td><td class="tm">'+r.s+'–'+r.e
           + '</td><td class="match">'+badge+mu+'</td><td class="cat">'+cat+'</td></tr>';
@@ -467,8 +503,9 @@ function buildFeed(s){
   var p=[];
   if(s.divs.length)  p.push('divs='+s.divs.map(encodeURIComponent).join(','));
   if(s.teams.length) p.push('teams='+s.teams.map(encodeURIComponent).join(','));
-  if(s.events) p.push('events=1');
-  if(s.hide)   p.push('hide=1');
+  if(s.et.length){ if(s.allEt) p.push('events=1');
+                   else p.push('etypes='+s.et.map(encodeURIComponent).join(',')); }
+  if(s.hide) p.push('hide=1');
   return base + (p.length ? '?'+p.join('&') : '');
 }
 function updateFeed(s){
@@ -478,17 +515,64 @@ function updateFeed(s){
   feedEl.dataset.url = url;
 }
 
+// ---- 親↔子チェックの連動（tri-state）----
+function syncDivFromTeams(div){
+  var teams=qsa('#g-matches .teamchk[data-div="'+cssq(div)+'"]');
+  var divc=document.querySelector('#g-matches .divchk[data-div="'+cssq(div)+'"]');
+  if(!divc) return;
+  var on=teams.filter(function(c){return c.checked;}).length;
+  divc.checked = on===teams.length && teams.length>0;
+  divc.indeterminate = on>0 && on<teams.length;
+}
+function cssq(s){return String(s).replace(/["\\]/g,'\\$&');}
+function syncAllMatches(){
+  if(!allMatches) return;
+  var d=qsa('#g-matches .divchk');
+  var on=d.filter(function(c){return c.checked;}).length;
+  var ind=d.some(function(c){return c.indeterminate;});
+  allMatches.checked = on===d.length && d.length>0;
+  allMatches.indeterminate = !allMatches.checked && (on>0 || ind);
+}
+function syncAllEvents(){
+  if(!allEvents) return;
+  var e=qsa('#g-events .etchk');
+  var on=e.filter(function(c){return c.checked;}).length;
+  allEvents.checked = on===e.length && e.length>0;
+  allEvents.indeterminate = on>0 && on<e.length;
+}
+
+function onChange(t){
+  if(t===allMatches){
+    qsa('#g-matches .divchk,#g-matches .teamchk').forEach(function(c){c.checked=allMatches.checked;c.indeterminate=false;});
+  } else if(t===allEvents){
+    qsa('#g-events .etchk').forEach(function(c){c.checked=allEvents.checked;});
+  } else if(t.classList.contains('divchk')){
+    var div=t.dataset.div;
+    qsa('#g-matches .teamchk[data-div="'+cssq(div)+'"]').forEach(function(c){c.checked=t.checked;});
+    t.indeterminate=false; syncAllMatches();
+  } else if(t.classList.contains('teamchk')){
+    syncDivFromTeams(t.dataset.div); syncAllMatches();
+  } else if(t.classList.contains('etchk')){
+    syncAllEvents();
+  }
+  render();
+}
+
 function bindAll(){
   document.addEventListener('change', function(e){
-    if(e.target && e.target.matches('#g-div input,#g-team input,#c-events,#c-hide,#f-month')) render();
+    var t=e.target;
+    if(t && (t===allMatches||t===allEvents||t.classList.contains('divchk')
+        ||t.classList.contains('teamchk')||t.classList.contains('etchk')
+        ||t===cHide||t===fMonth)) onChange(t);
   });
+  // summary 内のチェックボックスは details の開閉を起こさない
+  document.addEventListener('click', function(e){
+    if(e.target && e.target.matches('summary input[type=checkbox]')) e.stopPropagation();
+  }, true);
   if(fKw) fKw.addEventListener('input', render);
   var reset=document.getElementById('f-reset');
   if(reset) reset.addEventListener('click', function(){
-    checkedVals('#g-div input,#g-team input');  // no-op read
-    Array.prototype.slice.call(document.querySelectorAll('#g-div input,#g-team input'))
-      .forEach(function(x){x.checked=false;});
-    if(cEvents)cEvents.checked=false; if(cHide)cHide.checked=false;
+    qsa('.fpanel input[type=checkbox]').forEach(function(x){x.checked=false;x.indeterminate=false;});
     if(fMonth)fMonth.value=''; if(fKw)fKw.value='';
     render();
   });
@@ -528,11 +612,14 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
                      "dv": e.division, "n": 1 if e.note else 0, "k": "m"})
     for e in programs:
         rows.append({"d": e.date, "s": e.start, "e": e.end, "a": e.title, "h": "",
-                     "dv": "", "n": 0, "k": "p"})
+                     "dv": "", "n": 0, "k": "p", "et": event_type(e.title)})
     rows.sort(key=lambda r: (r["d"], r["s"]))
     data_json = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
 
-    # ディビジョン・月・チーム（部門ごと）
+    def esc(s: str) -> str:
+        return _h.escape(s)
+
+    # 階層: 試合 → ディビジョン → チーム ／ 公式イベント → 種類
     div_names = sorted({r["dv"] for r in rows if r["dv"]})
     months = sorted({r["d"][:7] for r in rows})
     team_by_div: dict[str, set[str]] = {}
@@ -541,42 +628,51 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
             for t in (r["a"], r["h"]):
                 if t:
                     team_by_div.setdefault(r["dv"], set()).add(t)
+    event_types = sorted({r["et"] for r in rows if r["k"] == "p" and r.get("et")})
 
-    def esc(s: str) -> str:
-        return _h.escape(s)
-
-    div_checks = "".join(
-        f'<label class="chip"><input type="checkbox" value="{esc(d)}">{esc(d)}</label>'
-        for d in div_names
-    )
-    team_groups = ""
+    # 試合ツリー（ディビジョンごとに畳み、中にチーム）
+    match_tree = ""
     for d in div_names:
         teams = sorted(team_by_div.get(d, ()))
-        inner = "".join(
-            f'<label class="chip"><input type="checkbox" value="{esc(t)}">{esc(t)}</label>'
+        team_chips = "".join(
+            f'<label class="chip"><input type="checkbox" class="teamchk" '
+            f'data-div="{esc(d)}" value="{esc(t)}">{esc(t)}</label>'
             for t in teams
         )
-        team_groups += (
-            f'<details class="tg"><summary>{esc(d)}<span class="count"> {len(teams)}</span>'
-            f'</summary><div class="chips">{inner}</div></details>'
+        match_tree += (
+            f'<details class="tg"><summary>'
+            f'<input type="checkbox" class="divchk" data-div="{esc(d)}">'
+            f'<span class="nm">{esc(d)}</span><span class="count">{len(teams)}チーム</span>'
+            f'</summary><div class="chips">{team_chips}</div></details>'
         )
+
+    event_chips = "".join(
+        f'<label class="chip"><input type="checkbox" class="etchk" value="{esc(et)}">{esc(et)}</label>'
+        for et in event_types
+    )
     month_opts = "".join(f'<option value="{m}">{m[:4]}/{m[5:7]}</option>' for m in months)
 
     filter_ui = f"""
 <div class="fpanel">
-  <div class="fgroup"><div class="flabel">ディビジョン</div>
-    <div class="chips" id="g-div">{div_checks}</div></div>
-  <div class="fgroup"><div class="flabel">チーム（部門ごと。開いて選択）</div>
-    <div id="g-team">{team_groups}</div></div>
-  <div class="fgroup"><div class="flabel">その他</div>
+  <details class="cat" open>
+    <summary><input type="checkbox" id="all-matches"><span class="nm">試合</span>
+      <span class="count">{len(div_names)}ディビジョン</span></summary>
+    <div class="catbody" id="g-matches">{match_tree}</div>
+  </details>
+  <details class="cat">
+    <summary><input type="checkbox" id="all-events"><span class="nm">公式イベント</span>
+      <span class="count">{len(event_types)}種類</span></summary>
+    <div class="catbody chips" id="g-events">{event_chips}</div>
+  </details>
+  <div class="fgroup viewopts"><div class="flabel">表示オプション（購読には影響しません）</div>
     <div class="frow">
-      <label class="chip"><input type="checkbox" id="c-events"> イベントを含む</label>
       <label class="chip"><input type="checkbox" id="c-hide"> 延期を隠す</label>
       <select id="f-month"><option value="">全期間</option>{month_opts}</select>
-      <input type="text" id="f-kw" placeholder="キーワード（表のみ）">
+      <input type="text" id="f-kw" placeholder="キーワード">
       <button type="button" class="reset" id="f-reset">すべてクリア</button>
       <span id="count"></span>
-    </div></div>
+    </div>
+  </div>
 </div>
 <div class="tablewrap"><table id="sched">
 <thead><tr><th>日付</th><th>時刻</th><th>対戦 / 内容</th><th>区分</th></tr></thead>
@@ -710,6 +806,7 @@ def write_feed(out: Path, specs: list[CalSpec], season_no: int,
                       "ev": render_vevent(e, location, dtstamp)})
     for e in programs:
         items.append({"dv": "", "a": e.title, "h": "", "k": "p", "n": 0,
+                      "et": event_type(e.title),
                       "ev": render_vevent(e, location, dtstamp)})
     feed = {
         "season": season_no,

@@ -7,9 +7,10 @@
 //
 //   divs   … カンマ区切りのディビジョン名（例 Gold,Brass）
 //   teams  … カンマ区切りのチーム名（URLエンコード）。away/home どちらでも一致
-//   events … 1 でイベント/クリニックを含める
+//   events … 1 で公式イベントを全種類含める
+//   etypes … カンマ区切りのイベント種類（例 クリニック,Drop in Hockey）。events=1 の下位指定
 //   hide   … 1 で延期の試合を除外
-//   （何も指定しなければ全試合＋イベント）
+//   （何も指定しなければ全試合＋全イベント）
 //
 // フィルタの意味はページ側 index.html の inSubscription() と一致させている。
 
@@ -43,16 +44,17 @@ export default {
     const q = url.searchParams;
     const divs = new Set(parseList(q.get("divs")));
     const teams = new Set(parseList(q.get("teams")));
+    const etypes = new Set(parseList(q.get("etypes")));
     const events = q.get("events") === "1" || q.get("events") === "true";
     const hide = q.get("hide") === "1" || q.get("hide") === "true";
-    const any = divs.size || teams.size || events;
+    const any = divs.size || teams.size || etypes.size || events;
 
     const blocks = [];
     for (const it of feed.events) {
       if (hide && it.n) continue;
       let ok;
       if (!any) ok = true;
-      else if (it.k === "p") ok = events;
+      else if (it.k === "p") ok = events || etypes.has(it.et);
       else ok = divs.has(it.dv) || teams.has(it.a) || teams.has(it.h);
       if (ok) blocks.push(it.ev);
     }
