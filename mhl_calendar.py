@@ -418,13 +418,22 @@ def collect_events(base: str = BASE) -> tuple[int, list[Event]]:
         for ev in parse_rent(html, url):
             by_uid.setdefault(ev.uid, ev)
 
-    events = sorted(by_uid.values(), key=lambda e: (e.date, e.start, e.number or e.title))
+    events = sorted(by_uid.values(), key=lambda e: (e.date, _hm_min(e.start), e.number or e.title))
     return season_no, events
 
 
 # ---------------------------------------------------------------------------
 # ICS 出力
 # ---------------------------------------------------------------------------
+def _hm_min(hm: str) -> int:
+    """'H:MM' を分に。文字列ソートだと 8:30 が 16:30 の後になるため数値で並べる用。"""
+    try:
+        h, m = hm.split(":")
+        return int(h) * 60 + int(m)
+    except (ValueError, AttributeError):
+        return 0
+
+
 def _dt_utc(date: str, hm: str) -> str:
     y, mo, d = map(int, date.split("-"))
     h, mi = map(int, hm.split(":"))
@@ -620,6 +629,7 @@ function fmtDate(d){var p=d.split('-');return p[1]+'/'+p[2]+' ('+WD[wday(d)]+')'
 function qsa(sel){return Array.prototype.slice.call(document.querySelectorAll(sel));}
 
 var cHide=document.getElementById('c-hide'),
+    cPast=document.getElementById('c-past'),
     fMonth=document.getElementById('f-month'),
     fKw=document.getElementById('f-kw'),
     tbody=document.getElementById('rows'),
@@ -627,6 +637,10 @@ var cHide=document.getElementById('c-hide'),
     feedEl=document.getElementById('feedurl'),
     allEvents=document.getElementById('all-events'),
     allRent=document.getElementById('all-rent');
+
+// 今日(ローカル=JST想定)を YYYY-MM-DD で。既定は今日以降のみ表示。
+var TODAY=(function(){var d=new Date();function p(n){return (n<10?'0':'')+n;}
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());})();
 
 // ---- 選択状態（購読対象。月・キーワード・延期は含めない）----
 function selection(){
@@ -655,6 +669,7 @@ function render(){
   for(var i=0;i<DATA.length;i++){
     var r=DATA[i];
     if(!inSubscription(r,s)) continue;
+    if(!(cPast&&cPast.checked) && r.d < TODAY) continue;  // 既定は今日以降
     if(s.hide && r.n) continue;
     if(mo && r.d.slice(0,7)!==mo) continue;
     if(kw && (r.a+' '+r.h).toLowerCase().indexOf(kw)<0) continue;
@@ -717,7 +732,7 @@ function bindAll(){
     var t=e.target;
     if(t && (t===allEvents||t===allRent||t.classList.contains('teamchk')
         ||t.classList.contains('etchk')||t.classList.contains('rlchk')
-        ||t===cHide||t===fMonth)) onChange(t);
+        ||t===cHide||t===cPast||t===fMonth)) onChange(t);
   });
   // summary 内のチェックボックスは details の開閉を起こさない
   document.addEventListener('click', function(e){
@@ -771,7 +786,7 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
     for e in rentals:
         rows.append({"d": e.date, "s": e.start, "e": e.end, "a": e.title, "h": "",
                      "dv": "", "n": 0, "k": "r", "et": e.title})
-    rows.sort(key=lambda r: (r["d"], r["s"]))
+    rows.sort(key=lambda r: (r["d"], _hm_min(r["s"])))
     data_json = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
 
     def esc(s: str) -> str:
@@ -833,6 +848,7 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
     <div class="catbody chips" id="g-events">{event_chips}</div>
   </details>{rent_cat}
   <div class="fgroup viewopts"><div class="frow">
+    <label class="chip"><input type="checkbox" id="c-past"> 過去も表示<span class="hint">（表のみ）</span></label>
     <label class="chip"><input type="checkbox" id="c-hide"> 延期を除く<span class="hint">（購読も）</span></label>
     <select id="f-month" title="月で絞り込み（表のみ）"><option value="">全期間</option>{month_opts}</select>
     <input type="text" id="f-kw" placeholder="🔍 チーム名など（表のみ）">
@@ -854,8 +870,7 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
     <button type="button" class="copy2" id="feed-copy">このURLをコピー</button>
     <a class="gcopen" href="https://calendar.google.com/" target="_blank" rel="noopener">Googleを開く</a>
   </div>
-  <p class="subhint">コピー → Googleカレンダー「他のカレンダー ＋ → <b>URLで追加</b>」に貼付。
-  <b>インポート不可</b>（更新されません）。手順は上の <b>❓使い方</b> を参照。</p>
+  <p class="subhint">コピー → Googleカレンダー「他のカレンダー ＋ → <b>URLで追加</b>」に貼付。手順は上の <b>❓使い方</b> を参照。</p>
 </div>"""
     else:
         subscribe_panel = """
@@ -877,7 +892,7 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
 <li>「このURLをコピー」を押す</li>
 <li>PCの Google カレンダー左「他のカレンダー ＋」→「<b>URL で追加</b>」に貼り付け</li>
 </ol>
-<p class="note">※「ダウンロード → インポート」はしないでください（更新されません）。かならず<b>「URL で追加」</b>で購読を。反映は Google 側の都合で数時間〜1日遅れることがあります。延期試合はタイトル先頭に <b>⚠延期</b>。<b>月・キーワードは表の閲覧用</b>で購読には反映されません。スマホは一度PCで登録すれば同期されます。</p>
+<p class="note">購読は Google カレンダーの<b>「URL で追加」</b>で行います。反映は Google 側の都合で数時間〜1日遅れることがあります。延期試合はタイトル先頭に <b>⚠延期</b>。<b>月・キーワード・過去表示は表の閲覧用</b>で購読には反映されません。スマホは一度PCで登録すれば同期されます。</p>
 <p class="foot">MHL {season_no}期 / 最終更新 {stamp} / データ元: <a href="{esc(BASE)}">misconduct.co.jp</a>（非公式）</p>
 </div></details>
 {filter_ui}
