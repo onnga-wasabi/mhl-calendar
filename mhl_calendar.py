@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import hashlib
+import json
 import re
 import sys
 import urllib.parse
@@ -345,6 +346,79 @@ details .card:last-child{border-bottom:none}
 .how .note{margin-top:1rem;padding:.8rem 1rem;background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px}
 .foot{margin-top:2rem;font-size:.8rem;color:var(--muted)}
 .foot a{color:var(--accent)}
+.filters{display:flex;flex-wrap:wrap;gap:.5rem .6rem;align-items:center;margin:.4rem 0 1rem}
+.filters select,.filters input[type=text]{font:inherit;font-size:.85rem;padding:.4rem .55rem;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--fg)}
+.filters input[type=text]{min-width:11rem}
+.filters label{font-size:.85rem;color:var(--muted);display:inline-flex;align-items:center;gap:.3rem;cursor:pointer}
+.filters .reset{font:inherit;font-size:.8rem;padding:.35rem .6rem;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--muted);cursor:pointer}
+#count{margin-left:auto;font-size:.85rem;color:var(--fg);font-weight:600;white-space:nowrap}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;margin-bottom:1.5rem;max-height:70vh;overflow-y:auto}
+table#sched{border-collapse:collapse;width:100%;font-size:.88rem}
+#sched th,#sched td{padding:.5rem .7rem;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+#sched thead th{position:sticky;top:0;background:var(--card);z-index:1;font-size:.78rem;color:var(--muted);white-space:nowrap}
+#sched tbody tr:hover{background:rgba(192,57,43,.07)}
+#sched .dt,#sched .tm{white-space:nowrap}
+#sched td.match{min-width:14rem}
+#sched .vs{color:var(--muted);font-size:.8rem;margin:0 .35rem}
+#sched .cat{color:var(--muted);font-size:.82rem;white-space:nowrap}
+#sched .delay{background:var(--accent);color:#fff;font-size:.7rem;padding:.05rem .35rem;border-radius:4px;margin-right:.3rem;white-space:nowrap}
+#sched tr.we .dt{color:var(--accent);font-weight:700}
+#sched .empty td{color:var(--muted);text-align:center;padding:1.5rem}
+"""
+
+# フィルタ＋テーブル描画＋コピーの JS。__DATA__ を試合データ JSON に置換して埋め込む。
+INDEX_JS = r"""
+var DATA = __DATA__;
+var WD = ['日','月','火','水','木','金','土'];
+function esc(s){return String(s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+function wday(d){var p=d.split('-');return new Date(+p[0],+p[1]-1,+p[2]).getDay();}
+function fmtDate(d){var p=d.split('-');return p[1]+'/'+p[2]+' ('+WD[wday(d)]+')';}
+
+var fDiv=document.getElementById('f-div'),
+    fTeam=document.getElementById('f-team'),
+    fMonth=document.getElementById('f-month'),
+    fHide=document.getElementById('f-hide'),
+    tbody=document.getElementById('rows'),
+    count=document.getElementById('count');
+
+function render(){
+  var dv=fDiv.value, tm=fTeam.value.trim().toLowerCase(), mo=fMonth.value, hide=fHide.checked;
+  var html='', n=0;
+  for(var i=0;i<DATA.length;i++){
+    var r=DATA[i];
+    if(dv==='__ev__'){ if(r.k!=='p') continue; }
+    else if(dv){ if(r.dv!==dv) continue; }
+    if(mo && r.d.slice(0,7)!==mo) continue;
+    if(hide && r.n) continue;
+    if(tm && (r.a+' '+r.h).toLowerCase().indexOf(tm)<0) continue;
+    n++;
+    var badge = r.n ? '<span class="delay">延期</span>' : '';
+    var mu = r.k==='p' ? esc(r.a)
+           : esc(r.a)+'<span class="vs">vs</span>'+esc(r.h);
+    var cat = r.k==='p' ? 'イベント' : esc(r.dv);
+    var we = (wday(r.d)===0||wday(r.d)===6) ? ' class="we"' : '';
+    html += '<tr'+we+'><td class="dt">'+fmtDate(r.d)+'</td><td class="tm">'+r.s+'–'+r.e
+          + '</td><td class="match">'+badge+mu+'</td><td class="cat">'+cat+'</td></tr>';
+  }
+  if(!n) html='<tr class="empty"><td colspan="4">該当する試合・イベントがありません</td></tr>';
+  tbody.innerHTML=html;
+  count.textContent=n+' 件';
+}
+[fDiv,fTeam,fMonth,fHide].forEach(function(el){el.addEventListener('input',render);});
+var reset=document.getElementById('f-reset');
+if(reset) reset.addEventListener('click',function(){fDiv.value='';fTeam.value='';fMonth.value='';fHide.checked=false;render();});
+render();
+
+document.querySelectorAll('button.copy').forEach(function(b){
+  b.addEventListener('click',function(){
+    var url=b.dataset.url, label=b.textContent;
+    function done(){ b.textContent='✓ コピーしました'; b.classList.add('done');
+      setTimeout(function(){ b.textContent=label; b.classList.remove('done'); },1500); }
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(url).then(done,function(){ window.prompt('このURLをコピーしてください',url); });
+    } else { window.prompt('このURLをコピーしてください',url); }
+  });
+});
 """
 
 
@@ -367,38 +441,77 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
             f"</div>"
         )
 
+    # ---- 購読カード（テーブルの下に置く）----
     overview = [s for s in specs if s.category in ("overview", "events")]
     divisions = [s for s in specs if s.category == "division"]
     teams = [s for s in specs if s.category == "team"]
 
-    sections = ["".join(card(s) for s in overview)]
-
+    sub_sections = ["".join(card(s) for s in overview)]
     if divisions:
-        sections.append('<h2 class="sec">ディビジョン別</h2>')
-        sections.append("".join(card(s) for s in divisions))
-
+        sub_sections.append('<h3 class="sec">ディビジョン別</h3>')
+        sub_sections.append("".join(card(s) for s in divisions))
     if teams:
-        sections.append('<h2 class="sec">チーム別</h2>'
-                        '<p class="sub">所属ディビジョンごとに畳んでいます。開いて選んでください。</p>')
+        sub_sections.append('<h3 class="sec">チーム別</h3>'
+                            '<p class="sub">所属ディビジョンごとに畳んでいます。開いて選んでください。</p>')
         by_div: dict[str, list[CalSpec]] = {}
         for s in teams:
             by_div.setdefault(s.division or "その他", []).append(s)
         for div in sorted(by_div):
             inner = "".join(card(s) for s in sorted(by_div[div], key=lambda s: s.name))
-            sections.append(
+            sub_sections.append(
                 f'<details><summary>{_h.escape(div)}'
                 f'<span class="count"> {len(by_div[div])} チーム</span></summary>{inner}</details>'
             )
 
+    # ---- 試合・イベントのテーブル用データ（最小粒度：1行1試合）----
+    matches = next((s.events for s in specs if s.category == "overview"), [])
+    programs = next((s.events for s in specs if s.category == "events"), [])
+    rows = []
+    for e in matches:
+        away, home = (e.title.split(" vs ", 1) + [""])[:2]
+        rows.append({"d": e.date, "s": e.start, "e": e.end, "a": away, "h": home,
+                     "dv": e.division, "n": 1 if e.note else 0, "k": "m"})
+    for e in programs:
+        rows.append({"d": e.date, "s": e.start, "e": e.end, "a": e.title, "h": "",
+                     "dv": "", "n": 0, "k": "p"})
+    rows.sort(key=lambda r: (r["d"], r["s"]))
+    data_json = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+
+    div_names = sorted({r["dv"] for r in rows if r["dv"]})
+    div_opts = "".join(f'<option value="{_h.escape(d)}">{_h.escape(d)}</option>' for d in div_names)
+    months = sorted({r["d"][:7] for r in rows})
+    month_opts = "".join(
+        f'<option value="{m}">{m[:4]}/{m[5:7]}</option>' for m in months
+    )
+    team_names = sorted({t for r in rows if r["k"] == "m" for t in (r["a"], r["h"]) if t})
+    team_opts = "".join(f'<option value="{_h.escape(t)}"></option>' for t in team_names)
+
+    filter_table = f"""
+<div class="filters">
+  <select id="f-div"><option value="">全ディビジョン</option>{div_opts}<option value="__ev__">イベントのみ</option></select>
+  <input type="text" id="f-team" list="teamlist" placeholder="チーム名で絞り込み">
+  <datalist id="teamlist">{team_opts}</datalist>
+  <select id="f-month"><option value="">全期間</option>{month_opts}</select>
+  <label><input type="checkbox" id="f-hide"> 延期を隠す</label>
+  <button type="button" class="reset" id="f-reset">クリア</button>
+  <span id="count"></span>
+</div>
+<div class="tablewrap"><table id="sched">
+<thead><tr><th>日付</th><th>時刻</th><th>対戦 / 内容</th><th>区分</th></tr></thead>
+<tbody id="rows"></tbody></table></div>"""
+
     stamp = f"{dtstamp[:4]}-{dtstamp[4:6]}-{dtstamp[6:8]} {dtstamp[9:11]}:{dtstamp[11:13]} UTC"
     body = f"""<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MHL カレンダー購読（{season_no}期）</title><style>{INDEX_CSS}</style></head>
+<title>MHL スケジュール（{season_no}期）</title><style>{INDEX_CSS}</style></head>
 <body><div class="wrap">
 <h1>MHL スケジュール カレンダー</h1>
 <p class="sub">Misconduct Hockey League {season_no}期 / 最終更新 {stamp}<br>
-購読したい単位（全試合・ディビジョン・チーム・イベント）を Google カレンダーに<b>URLで追加</b>してください。自動で最新に追従します。</p>
-{''.join(sections)}
+下の表で日程を確認できます。ディビジョン・チーム・月・延期で絞り込めます。</p>
+{filter_table}
+<h2 class="sec">Google カレンダーに購読する</h2>
+<p class="sub">見たい単位（全試合・ディビジョン・チーム・イベント）を Google カレンダーに<b>URLで追加</b>すると自動で最新に追従します。</p>
+{''.join(sub_sections)}
 <div class="how"><h2 style="font-size:1rem;color:var(--fg)">Google カレンダーへの登録方法</h2>
 <ol>
 <li>登録したい行の「<b>購読URLをコピー</b>」を押す（URLがコピーされます）</li>
@@ -412,18 +525,7 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
 <p class="foot">データ元: <a href="{_h.escape(BASE)}">misconduct.co.jp</a>
 （非公式・個人利用向けの変換ツールです）</p>
 </div>
-<script>
-document.querySelectorAll('button.copy').forEach(function(b){{
-  b.addEventListener('click',function(){{
-    var url=b.dataset.url, label=b.textContent;
-    function done(){{ b.textContent='✓ コピーしました'; b.classList.add('done');
-      setTimeout(function(){{ b.textContent=label; b.classList.remove('done'); }},1500); }}
-    if(navigator.clipboard&&navigator.clipboard.writeText){{
-      navigator.clipboard.writeText(url).then(done,function(){{ window.prompt('このURLをコピーしてください',url); }});
-    }} else {{ window.prompt('このURLをコピーしてください',url); }}
-  }});
-}});
-</script>
+<script>{INDEX_JS.replace("__DATA__", data_json)}</script>
 </body></html>"""
     (out / "index.html").write_text(body, encoding="utf-8")
 
