@@ -23,23 +23,22 @@ function parseList(v) {
   return v.split(",").map((s) => decodeURIComponent(s.trim())).filter(Boolean);
 }
 
-// 選択内容から見分けやすいカレンダー名を作る（Googleに同名が並ばないように）
+// 選択内容から見分けやすいカレンダー名を作る（Googleに同名が並ばないように）。
+// カテゴリ（チーム/公式/非公式）ごとに要約するので、混在選択でも中身が分かる。
 function calName(q, feed) {
   const season = feed.calname || "MHL";
-  const parts = [];
-  const teams = parseList(q.get("teams"));
-  const divs = parseList(q.get("divs"));
+  const teams = parseList(q.get("teams")).concat(parseList(q.get("divs")));
   const et = parseList(q.get("etypes"));
   const rl = parseList(q.get("rlabels"));
-  if (teams.length) parts.push(...teams);
-  if (divs.length) parts.push(...divs);
-  if (q.get("events") === "1") parts.push("公式イベント");
-  else if (et.length) parts.push(...et);
-  if (q.get("rent") === "1") parts.push("非公式イベント");
-  else if (rl.length) parts.push(...rl);
-  if (!parts.length) return `${season} 全部`;
-  const shown = parts.slice(0, 3).join("・") + (parts.length > 3 ? ` 他${parts.length - 3}` : "");
-  return `${season} ${shown}`;
+  const seg = [];
+  if (teams.length) {
+    seg.push(teams.length <= 2 ? teams.join("・") : `${teams[0]}他${teams.length - 1}チーム`);
+  }
+  if (q.get("events") === "1") seg.push("公式イベント");
+  else if (et.length) seg.push(et.length <= 2 ? et.join("・") : `公式イベント${et.length}種`);
+  if (q.get("rent") === "1") seg.push("非公式イベント");
+  else if (rl.length) seg.push(rl.length <= 2 ? rl.join("・") : `非公式${rl.length}件`);
+  return seg.length ? `${season} ${seg.join(" + ")}` : `${season} 全部`;
 }
 
 function icsEsc(s) {
