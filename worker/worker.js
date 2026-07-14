@@ -23,6 +23,47 @@ function parseList(v) {
   return v.split(",").map((s) => decodeURIComponent(s.trim())).filter(Boolean);
 }
 
+// 選択内容から見分けやすいカレンダー名を作る（Googleに同名が並ばないように）
+function calName(q, feed) {
+  const season = feed.calname || "MHL";
+  const parts = [];
+  const teams = parseList(q.get("teams"));
+  const divs = parseList(q.get("divs"));
+  const et = parseList(q.get("etypes"));
+  const rl = parseList(q.get("rlabels"));
+  if (teams.length) parts.push(...teams);
+  if (divs.length) parts.push(...divs);
+  if (q.get("events") === "1") parts.push("公式イベント");
+  else if (et.length) parts.push(...et);
+  if (q.get("rent") === "1") parts.push("非公式イベント");
+  else if (rl.length) parts.push(...rl);
+  if (!parts.length) return `${season} 全部`;
+  const shown = parts.slice(0, 3).join("・") + (parts.length > 3 ? ` 他${parts.length - 3}` : "");
+  return `${season} ${shown}`;
+}
+
+function icsEsc(s) {
+  return String(s).replace(/([\\;,])/g, "\\$1").replace(/\n/g, "\\n");
+}
+
+// RFC5545 の75オクテット折り返し（UTF-8バイト単位）
+function foldLine(line) {
+  const enc = new TextEncoder();
+  if (enc.encode(line).length <= 75) return line;
+  const out = [];
+  let cur = "";
+  for (const ch of line) {
+    if (enc.encode(cur + ch).length > 75) {
+      out.push(cur);
+      cur = " " + ch;
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.join("\r\n");
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -66,7 +107,7 @@ export default {
     }
 
     const header = feed.header.slice();
-    header.push("X-WR-CALNAME:" + (feed.calname || "MHL"));
+    header.push(foldLine("X-WR-CALNAME:" + icsEsc(calName(q, feed))));
     const body =
       header.join("\r\n") +
       "\r\n" +
