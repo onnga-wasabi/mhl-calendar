@@ -229,13 +229,17 @@ _RENT_TITLE = re.compile(r"(\d{4})年\s*(\d{1,2})月")
 _RENT_FNAME = re.compile(r"rent_(\d{4})(\d{2})", re.I)
 
 
-def _yellow_classes(html: str) -> set[str]:
-    """CSS から background:yellow のクラス名を集める（クラス名はファイル毎に異なる）。"""
+def _bg_classes(html: str, color: str) -> set[str]:
+    """CSS から background:<color> のクラス名を集める（クラス名はファイル毎に異なる）。"""
     out: set[str] = set()
     for m in re.finditer(r"\.([\w-]+)\s*\{([^}]*)\}", html):
-        if re.search(r"background:\s*yellow", m.group(2), re.I):
+        if re.search(rf"background:\s*{color}\b", m.group(2), re.I):
             out.add(m.group(1))
     return out
+
+
+def _yellow_classes(html: str) -> set[str]:
+    return _bg_classes(html, "yellow")
 
 
 def _rent_columns(row: list[_Cell]):
@@ -250,9 +254,16 @@ def _rent_columns(row: list[_Cell]):
 
 
 def parse_rent(html: str, source: str) -> list[Event]:
-    """レンタル表から黄色ブロック（非公式・個人イベント）を取り出す。"""
+    """レンタル表から公式・非公式イベントを取り出す。
+
+    - 黄色セル = 非公式・個人イベント（kind=rental）
+    - 青セル かつ 平日(月〜金) = 公式プログラム（kind=program）。
+      青は公式全般だが週末はスケジュールファイルと重複するため、
+      スケジュールに無い平日（主に金曜の Pick Up）だけを拾う。
+    """
     yellow = _yellow_classes(html)
-    if not yellow:
+    blue = _bg_classes(html, "blue")
+    if not (yellow or blue):
         return []
     parser = _TableParser()
     parser.feed(html)
@@ -304,12 +315,20 @@ def parse_rent(html: str, source: str) -> list[Event]:
         if not (day_text.isdigit() and 1 <= int(day_text) <= 31):
             continue
         date = f"{year:04d}-{month:02d}-{int(day_text):02d}"
+        weekday = datetime(year, month, int(day_text)).weekday()  # 0=月..4=金
         for col, span, text, cls in r:
-            if cls in yellow and text:
-                start = col_to_min(col)
-                end = col_to_min(col + span)
+            if not text:
+                continue
+            if cls in yellow:
                 events.append(Event(
-                    kind="rental", date=date, start=hhmm(start), end=hhmm(end),
+                    kind="rental", date=date,
+                    start=hhmm(col_to_min(col)), end=hhmm(col_to_min(col + span)),
+                    title=text, division="", number="", note="", source=source,
+                ))
+            elif cls in blue and weekday < 5:  # 平日の公式プログラム（金曜Pick Up等）
+                events.append(Event(
+                    kind="program", date=date,
+                    start=hhmm(col_to_min(col)), end=hhmm(col_to_min(col + span)),
                     title=text, division="", number="", note="", source=source,
                 ))
     return events
@@ -565,6 +584,28 @@ details.tg .chips{padding:.4rem 0 .6rem 1.4rem}
 .copy2.done{background:transparent;color:var(--accent)}
 .gcopen{background:transparent;color:var(--accent);border:1px solid var(--accent)}
 .gcopen:hover{background:var(--accent);color:#fff}
+.cat>summary .ic,details.tg>summary .ic{font-size:1rem;line-height:1}
+.help{border:1px solid var(--line);border-radius:10px;margin:.3rem 0 .8rem;background:var(--card)}
+.help>summary{cursor:pointer;font-weight:600;font-size:.9rem;padding:.6rem .8rem;list-style:none;color:var(--accent)}
+.help>summary::-webkit-details-marker{display:none}
+.helpbody{padding:.2rem 1rem 1rem;font-size:.88rem}
+.helpbody ol{padding-left:1.2rem;margin:.5rem 0}
+.helpbody .note{margin-top:.6rem;padding:.7rem .8rem;background:var(--bg);border-left:3px solid var(--accent);border-radius:8px;font-size:.82rem;color:var(--muted)}
+.helpbody .foot{margin:.7rem 0 0;font-size:.75rem;color:var(--muted)}
+.subhint{margin:.6rem 0 0;font-size:.8rem;color:var(--muted)}
+@media (max-width:640px){
+  .wrap{padding:1rem .7rem 3rem}
+  h1{font-size:1.2rem;margin-bottom:.2rem}
+  .fpanel{padding:.5rem .6rem}
+  .cat>summary{padding:.55rem .6rem;font-size:.92rem}
+  .catbody{padding:.2rem .4rem .7rem .8rem}
+  .chip{font-size:.8rem;padding:.28rem .55rem}
+  .tablewrap{max-height:56vh}
+  #sched th,#sched td{padding:.4rem .5rem;font-size:.82rem}
+  .sec{font-size:1rem;margin:1.4rem 0 .4rem}
+  .frow{gap:.4rem}
+  .frow select,.frow input[type=text]{flex:1 1 8rem;min-width:0}
+}
 """
 
 # フィルタ＋テーブル描画＋購読URL生成の JS。__DATA__ を試合データ JSON に置換して埋め込む。
@@ -773,7 +814,7 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
     )
     rent_cat = f"""
   <details class="cat">
-    <summary><input type="checkbox" id="all-rent"><span class="nm">非公式・個人イベント</span>
+    <summary><input type="checkbox" id="all-rent"><span class="ic">👥</span><span class="nm">非公式・個人イベント</span>
       <span class="count">{len(rent_labels)}件</span></summary>
     <div class="catbody chips" id="g-rent">{rent_chips}</div>
   </details>""" if rent_labels else ""
@@ -781,27 +822,22 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
 
     filter_ui = f"""
 <div class="fpanel">
-  <details class="cat" open>
-    <summary><span class="nm">試合</span>
-      <span class="count">チームを選択（{len(div_names)}ディビジョン）</span></summary>
+  <details class="cat">
+    <summary><span class="ic">🏒</span><span class="nm">試合</span>
+      <span class="count">チーム別（{len(div_names)}部門）</span></summary>
     <div class="catbody" id="g-matches">{match_tree}</div>
   </details>
   <details class="cat">
-    <summary><input type="checkbox" id="all-events"><span class="nm">公式イベント</span>
+    <summary><input type="checkbox" id="all-events"><span class="ic">📣</span><span class="nm">公式イベント</span>
       <span class="count">{len(event_types)}種類</span></summary>
     <div class="catbody chips" id="g-events">{event_chips}</div>
   </details>{rent_cat}
-  <div class="fgroup"><div class="frow">
-    <label class="chip"><input type="checkbox" id="c-hide"> 延期の試合を除く</label>
-    <span class="hint">（購読にも反映されます）</span>
-  </div></div>
-  <div class="fgroup viewopts"><div class="flabel">表示オプション（表の閲覧用・購読には影響しません）</div>
-    <div class="frow">
-      <select id="f-month"><option value="">全期間</option>{month_opts}</select>
-      <input type="text" id="f-kw" placeholder="キーワード">
-      <button type="button" class="reset" id="f-reset">すべてクリア</button>
-      <span id="count"></span>
-    </div>
+  <div class="fgroup viewopts"><div class="frow">
+    <label class="chip"><input type="checkbox" id="c-hide"> 延期を除く<span class="hint">（購読も）</span></label>
+    <select id="f-month" title="月で絞り込み（表のみ）"><option value="">全期間</option>{month_opts}</select>
+    <input type="text" id="f-kw" placeholder="🔍 チーム名など（表のみ）">
+    <button type="button" class="reset" id="f-reset">クリア</button>
+    <span id="count"></span>
   </div>
 </div>
 <div class="tablewrap"><table id="sched">
@@ -810,31 +846,21 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
 
     # 「選択を購読」パネル。feed_url が未設定なら注意書きを出す。
     if feed_url:
-        subscribe_panel = f"""
-<h2 class="sec">選択した内容を Google カレンダーに購読</h2>
-<p class="sub">上でチェックした<b>チーム・公式イベント・非公式/個人イベント</b>と<b>「延期の試合を除く」</b>がそのまま1本のURLになります。
-<b>月・キーワードは表の閲覧用</b>で購読には反映されません。何も選ばなければ全部です。</p>
+        subscribe_panel = """
+<h2 class="sec">📅 選択を購読</h2>
 <div class="subbox">
   <code id="feedurl"></code>
   <div class="subbtns">
     <button type="button" class="copy2" id="feed-copy">このURLをコピー</button>
-    <a class="gcopen" href="https://calendar.google.com/" target="_blank" rel="noopener">Googleカレンダーを開く</a>
+    <a class="gcopen" href="https://calendar.google.com/" target="_blank" rel="noopener">Googleを開く</a>
   </div>
-</div>
-<div class="how"><h2 style="font-size:1rem;color:var(--fg)">登録方法</h2>
-<ol>
-<li>フィルタで見たいディビジョン／チーム／イベントをチェック</li>
-<li>「このURLをコピー」を押す</li>
-<li>PCの Google カレンダー左「他のカレンダー ＋」→「<b>URL で追加</b>」に貼り付け</li>
-</ol>
-<p class="note">※「ダウンロード → インポート」はしないでください（更新されません）。かならず<b>「URL で追加」</b>で購読を。<br>
-反映は Google 側の都合で数時間〜1日ほど遅れます。延期の試合はタイトル先頭に <b>⚠延期</b> が付きます。
-スマホは一度PCで登録すれば同期されます。</p></div>"""
+  <p class="subhint">コピー → Googleカレンダー「他のカレンダー ＋ → <b>URLで追加</b>」に貼付。
+  <b>インポート不可</b>（更新されません）。手順は上の <b>❓使い方</b> を参照。</p>
+</div>"""
     else:
         subscribe_panel = """
-<h2 class="sec">選択した内容を購読（準備中）</h2>
-<p class="note">購読フィード（Cloudflare Worker）が未設定です。デプロイ後にフィードURLを設定すると、
-上の選択がそのまま購読URLになります。</p>"""
+<h2 class="sec">📅 選択を購読（準備中）</h2>
+<p class="note">購読フィード（Cloudflare Worker）が未設定です。</p>"""
 
     feed_js = "var FEED=" + json.dumps(feed_url) + ";\n"
     stamp = f"{dtstamp[:4]}-{dtstamp[4:6]}-{dtstamp[6:8]} {dtstamp[9:11]}:{dtstamp[11:13]} UTC"
@@ -842,13 +868,20 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MHL スケジュール（{season_no}期）</title><style>{INDEX_CSS}</style></head>
 <body><div class="wrap">
-<h1>MHL スケジュール カレンダー</h1>
-<p class="sub">Misconduct Hockey League {season_no}期 / 最終更新 {stamp}<br>
-チーム・公式イベント・非公式/個人イベントで絞り込めます。選んだ内容はそのまま Google カレンダーに購読できます。</p>
+<h1>🏒 MHL スケジュール</h1>
+<details class="help"><summary>❓ 使い方・Googleカレンダー登録方法</summary>
+<div class="helpbody">
+<p>見たい<b>チーム／公式イベント／非公式・個人イベント</b>をチェック → 下の「このURLをコピー」→ Googleカレンダーで購読すると、選んだ内容が1本のURLになり<b>自動更新</b>されます。</p>
+<ol>
+<li>フィルタで見たいチーム／イベントをチェック</li>
+<li>「このURLをコピー」を押す</li>
+<li>PCの Google カレンダー左「他のカレンダー ＋」→「<b>URL で追加</b>」に貼り付け</li>
+</ol>
+<p class="note">※「ダウンロード → インポート」はしないでください（更新されません）。かならず<b>「URL で追加」</b>で購読を。反映は Google 側の都合で数時間〜1日遅れることがあります。延期試合はタイトル先頭に <b>⚠延期</b>。<b>月・キーワードは表の閲覧用</b>で購読には反映されません。スマホは一度PCで登録すれば同期されます。</p>
+<p class="foot">MHL {season_no}期 / 最終更新 {stamp} / データ元: <a href="{esc(BASE)}">misconduct.co.jp</a>（非公式）</p>
+</div></details>
 {filter_ui}
 {subscribe_panel}
-<p class="foot">データ元: <a href="{esc(BASE)}">misconduct.co.jp</a>
-（非公式・個人利用向けの変換ツールです）</p>
 </div>
 <script>{feed_js}{INDEX_JS.replace("__DATA__", data_json)}</script>
 </body></html>"""
