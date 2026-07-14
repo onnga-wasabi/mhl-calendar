@@ -330,12 +330,9 @@ h1{font-size:1.5rem;margin:0 0 .3rem}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1rem 1.1rem;margin:.6rem 0;display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
 .card .name{font-weight:600;flex:1;min-width:9rem}
 .card .count{color:var(--muted);font-size:.85rem}
-.card .gcal,.card .copy{text-decoration:none;font-size:.82rem;font-weight:600;padding:.45rem .8rem;border-radius:8px;white-space:nowrap;cursor:pointer;font-family:inherit}
-.card .gcal{background:var(--accent);color:#fff;border:1px solid var(--accent)}
-.card .gcal:hover{opacity:.85}
-.card .copy{background:transparent;color:var(--accent);border:1px solid var(--accent)}
-.card .copy:hover{background:var(--accent);color:#fff}
-.card .copy.done{background:var(--accent);color:#fff}
+.card .copy{font-size:.85rem;font-weight:600;padding:.45rem .9rem;border-radius:8px;white-space:nowrap;cursor:pointer;font-family:inherit;background:var(--accent);color:#fff;border:1px solid var(--accent)}
+.card .copy:hover{opacity:.85}
+.card .copy.done{background:transparent;color:var(--accent)}
 .sec{font-size:1.05rem;margin:2.2rem 0 .4rem;padding-bottom:.3rem;border-bottom:2px solid var(--accent)}
 details{background:var(--card);border:1px solid var(--line);border-radius:12px;margin:.6rem 0;padding:.2rem .4rem}
 details>summary{cursor:pointer;font-weight:600;padding:.7rem}
@@ -361,13 +358,12 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
 
     def card(spec: CalSpec) -> str:
         url = link(spec.filename)
-        # cid= による「URLで追加（購読）」ディープリンク。ダウンロードは発生しない。
-        gcal = "https://calendar.google.com/calendar/render?cid=" + urllib.parse.quote(url, safe="")
+        # クリックでクリップボードにコピーするだけ（ダウンロードは発生させない）。
+        # 貼り付け先は Google カレンダーの「URLで追加」。
         return (
             f'<div class="card"><span class="name">{_h.escape(spec.name)}</span>'
             f'<span class="count">{len(spec.events)} 件</span>'
-            f'<a class="gcal" href="{_h.escape(gcal)}" target="_blank" rel="noopener">Googleに追加</a>'
-            f'<button class="copy" type="button" data-url="{_h.escape(url)}">URLをコピー</button>'
+            f'<button class="copy" type="button" data-url="{_h.escape(url)}">購読URLをコピー</button>'
             f"</div>"
         )
 
@@ -403,12 +399,16 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
 <p class="sub">Misconduct Hockey League {season_no}期 / 最終更新 {stamp}<br>
 購読したい単位（全試合・ディビジョン・チーム・イベント）を Google カレンダーに<b>URLで追加</b>してください。自動で最新に追従します。</p>
 {''.join(sections)}
-<div class="how"><h2 style="font-size:1rem;color:var(--fg)">登録方法（どちらもURL購読＝自動更新）</h2>
-<p><b>かんたん:</b>「<b>Googleに追加</b>」を押すと Google カレンダーが開き、そのまま追加できます。</p>
-<p><b>手動:</b>「URLをコピー」を押す → Google カレンダー左側「他のカレンダー ＋」→「<b>URLで追加</b>」→ 貼り付けて追加。</p>
+<div class="how"><h2 style="font-size:1rem;color:var(--fg)">Google カレンダーへの登録方法</h2>
+<ol>
+<li>登録したい行の「<b>購読URLをコピー</b>」を押す（URLがコピーされます）</li>
+<li>PCで <a href="https://calendar.google.com/" target="_blank" rel="noopener">Google カレンダー</a> を開き、左側「<b>他のカレンダー</b>」の＋ →「<b>URL で追加</b>」</li>
+<li>コピーしたURLを貼り付けて「<b>カレンダーを追加</b>」</li>
+</ol>
 <p class="note">※「ダウンロード → インポート」はしないでください。インポートはその時点のコピーで<b>更新されません</b>。
-かならず<b>URLで追加（購読）</b>で登録してください。<br>
-サイト更新への反映は Google 側の都合で数時間〜1日ほど遅れます。延期の試合はタイトル先頭に <b>⚠※延期</b> が付きます。</p></div>
+かならず上の手順の<b>「URL で追加」（購読）</b>で登録してください。<br>
+サイト更新への反映は Google 側の都合で数時間〜1日ほど遅れます。延期の試合はタイトル先頭に <b>⚠※延期</b> が付きます。<br>
+スマホアプリからは「URL で追加」ができないため、一度PCブラウザで登録すれば以後スマホにも同期されます。</p></div>
 <p class="foot">データ元: <a href="{_h.escape(BASE)}">misconduct.co.jp</a>
 （非公式・個人利用向けの変換ツールです）</p>
 </div>
