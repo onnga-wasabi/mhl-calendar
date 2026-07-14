@@ -67,11 +67,12 @@ def event_type(title: str) -> str:
 # HTML → 10 列グリッド
 # ---------------------------------------------------------------------------
 class _Cell:
-    __slots__ = ("text", "colspan")
+    __slots__ = ("text", "colspan", "cls")
 
     def __init__(self) -> None:
         self.text = ""
         self.colspan = 1
+        self.cls = ""
 
 
 class _TableParser(HTMLParser):
@@ -94,6 +95,8 @@ class _TableParser(HTMLParser):
                         self._cell.colspan = max(1, int(v))
                     except (TypeError, ValueError):
                         pass
+                elif k == "class":
+                    self._cell.cls = v or ""
 
     def handle_endtag(self, tag):
         if tag in ("td", "th") and self._cell is not None and self._cur is not None:
@@ -190,13 +193,17 @@ def parse_schedule(html: str, source: str) -> list[Event]:
 
         note = mark1 if mark1.startswith("※") else ""
 
-        if _NUM.match(num):  # 試合番号あり → リーグ戦
+        # 試合かイベントかは「ホーム欄(col8)が埋まっているか」で判定する。
+        # 試合番号は数字とは限らない（'-' や 'PO14'(プレーオフ)もある）ため、
+        # 番号での判定は誤分類の原因になる（例: 「ふらら vs Individuals WB」）。
+        if home.strip():  # away/home が揃う → 試合
+            gid = num if re.fullmatch(r"[A-Za-z0-9]+", num) else ""  # UID 用（'-'は無効）
             events.append(Event(
                 kind="match", date=current_date, start=start, end=end,
                 title=f"{away} vs {home}", division=_norm_division(division),
-                number=num, note=note, source=source,
+                number=gid, note=note, source=source,
             ))
-        else:  # col0=='-' → プログラム/イベント
+        else:  # ホームなし → プログラム/イベント
             name = away.strip()
             if name in PROGRAM_NOISE or "時間調整" in name:
                 continue
@@ -204,6 +211,99 @@ def parse_schedule(html: str, source: str) -> list[Event]:
                 kind="program", date=current_date, start=start, end=end,
                 title=name, division="", number="", note="", source=source,
             ))
+    return events
+
+
+# ---------------------------------------------------------------------------
+# レンタルリンク表（rent_YYYYMM.htm）— 黄色セル＝非公式・個人イベント
+# ---------------------------------------------------------------------------
+_RENT_TITLE = re.compile(r"(\d{4})年\s*(\d{1,2})月")
+_RENT_FNAME = re.compile(r"rent_(\d{4})(\d{2})", re.I)
+
+
+def _yellow_classes(html: str) -> set[str]:
+    """CSS から background:yellow のクラス名を集める（クラス名はファイル毎に異なる）。"""
+    out: set[str] = set()
+    for m in re.finditer(r"\.([\w-]+)\s*\{([^}]*)\}", html):
+        if re.search(r"background:\s*yellow", m.group(2), re.I):
+            out.add(m.group(1))
+    return out
+
+
+def _rent_columns(row: list[_Cell]):
+    """行を (開始列, colspan, テキスト, クラス) の並びに展開する。"""
+    out = []
+    col = 0
+    for cell in row:
+        text = " ".join(cell.text.split()).replace("\xa0", " ").strip()
+        out.append((col, cell.colspan, text, cell.cls))
+        col += cell.colspan
+    return out
+
+
+def parse_rent(html: str, source: str) -> list[Event]:
+    """レンタル表から黄色ブロック（非公式・個人イベント）を取り出す。"""
+    yellow = _yellow_classes(html)
+    if not yellow:
+        return []
+    parser = _TableParser()
+    parser.feed(html)
+    rows = [_rent_columns(r) for r in parser.rows]
+
+    # 年月（タイトル優先、なければファイル名）
+    ym = None
+    for r in rows:
+        for _, _, text, _ in r:
+            m = _RENT_TITLE.search(text)
+            if m:
+                ym = (int(m.group(1)), int(m.group(2)))
+                break
+        if ym:
+            break
+    if ym is None:
+        m = _RENT_FNAME.search(source)
+        if not m:
+            return []
+        ym = (int(m.group(1)), int(m.group(2)))
+    year, month = ym
+
+    # 時刻ヘッダ行を探す（6〜24 の整数ラベルが最も多い行）＋ 列→分 の対応
+    def hour_labels(r):
+        pts = []
+        for col, _, text, _ in r:
+            if text.isdigit() and 6 <= int(text) <= 24:
+                pts.append((col, int(text)))
+        return pts
+    header = max(rows, key=lambda r: len(hour_labels(r)), default=[])
+    labels = hour_labels(header)
+    if len(labels) < 2:
+        return []
+    labels.sort()
+    (c0, h0), (c1, h1) = labels[0], labels[-1]
+    per_col = (h1 - h0) * 60 / (c1 - c0)  # 1列あたりの分（通常30）
+
+    def col_to_min(col: float) -> int:
+        return round(h0 * 60 + (col - c0) * per_col)
+
+    def hhmm(minutes: int) -> str:
+        return f"{minutes // 60}:{minutes % 60:02d}"
+
+    events: list[Event] = []
+    for r in rows:
+        if not r:
+            continue
+        day_text = r[0][2]
+        if not (day_text.isdigit() and 1 <= int(day_text) <= 31):
+            continue
+        date = f"{year:04d}-{month:02d}-{int(day_text):02d}"
+        for col, span, text, cls in r:
+            if cls in yellow and text:
+                start = col_to_min(col)
+                end = col_to_min(col + span)
+                events.append(Event(
+                    kind="rental", date=date, start=hhmm(start), end=hhmm(end),
+                    title=text, division="", number="", note="", source=source,
+                ))
     return events
 
 
@@ -235,11 +335,10 @@ def discover_season_page(base: str = BASE) -> tuple[int, str]:
     return best
 
 
-def discover_schedule_files(season_url: str) -> list[str]:
-    """期のページから、スケジュール .htm ファイルのリンクを列挙する。"""
-    html = fetch(season_url).decode("utf-8", "replace")
-    urls = re.findall(r'href="(https://[^"]+?/uploads/[^"]+?\.html?)"', html, re.I)
-    # 重複除去（順序維持）
+def _discover_uploads(page_url: str, pattern: str) -> list[str]:
+    """ページから uploads 配下の .htm リンクを列挙する（順序維持で重複除去）。"""
+    html = fetch(page_url).decode("utf-8", "replace")
+    urls = re.findall(pattern, html, re.I)
     seen: set[str] = set()
     out: list[str] = []
     for u in urls:
@@ -247,6 +346,22 @@ def discover_schedule_files(season_url: str) -> list[str]:
             seen.add(u)
             out.append(u)
     return out
+
+
+def discover_schedule_files(season_url: str) -> list[str]:
+    """期のページから、スケジュール .htm ファイルのリンクを列挙する。"""
+    return _discover_uploads(season_url, r'href="(https://[^"]+?/uploads/[^"]+?\.html?)"')
+
+
+def discover_rent_files(base: str = BASE) -> list[str]:
+    """RENT-A-RINK ページから rent_YYYYMM.htm のリンクを列挙する。"""
+    try:
+        return _discover_uploads(
+            urllib.parse.urljoin(base, "rent-a-rink/"),
+            r'href="(https://[^"]+?/uploads/rent_\d+\.html?)"')
+    except Exception as exc:
+        print(f"  ! rent-a-rink: {exc}", file=sys.stderr)
+        return []
 
 
 def collect_events(base: str = BASE) -> tuple[int, list[Event]]:
@@ -265,6 +380,17 @@ def collect_events(base: str = BASE) -> tuple[int, list[Event]]:
         for ev in parse_schedule(html, url):
             # 試合番号ベースの UID で、月別ファイルと部門別ファイルの重複を排除
             by_uid.setdefault(ev.uid, ev)
+
+    # レンタル表の黄色ブロック（非公式・個人イベント）
+    for url in discover_rent_files(base):
+        try:
+            html = fetch_text(url)
+        except Exception as exc:
+            print(f"  ! {url}: {exc}", file=sys.stderr)
+            continue
+        for ev in parse_rent(html, url):
+            by_uid.setdefault(ev.uid, ev)
+
     events = sorted(by_uid.values(), key=lambda e: (e.date, e.start, e.number or e.title))
     return season_no, events
 
@@ -389,6 +515,7 @@ table#sched{border-collapse:collapse;width:100%;font-size:.88rem}
 #sched .vs{color:var(--muted);font-size:.8rem;margin:0 .35rem}
 #sched .cat{color:var(--muted);font-size:.82rem;white-space:nowrap}
 #sched .delay{background:var(--accent);color:#fff;font-size:.7rem;padding:.05rem .35rem;border-radius:4px;margin-right:.3rem;white-space:nowrap}
+#sched .rtag{background:var(--line);color:var(--muted);font-size:.68rem;padding:.05rem .3rem;border-radius:4px;margin-right:.3rem}
 #sched tr.we .dt{color:var(--accent);font-weight:700}
 #sched .empty td{color:var(--muted);text-align:center;padding:1.5rem}
 .fpanel{border:1px solid var(--line);border-radius:12px;padding:.8rem 1rem;margin:.4rem 0 1rem;background:var(--card)}
@@ -448,29 +575,27 @@ var cHide=document.getElementById('c-hide'),
     tbody=document.getElementById('rows'),
     count=document.getElementById('count'),
     feedEl=document.getElementById('feedurl'),
-    allMatches=document.getElementById('all-matches'),
-    allEvents=document.getElementById('all-events');
+    allEvents=document.getElementById('all-events'),
+    allRent=document.getElementById('all-rent');
 
 // ---- 選択状態（購読対象。月・キーワード・延期は含めない）----
 function selection(){
-  var divchk=qsa('#g-matches .divchk');
-  var selDivSet={}; divchk.forEach(function(c){ if(c.checked) selDivSet[c.dataset.div]=1; });
-  var divs=Object.keys(selDivSet);
-  // 部門まるごと選択済みのチームは divs 側に含まれるので teams からは除外
-  var teams=qsa('#g-matches .teamchk')
-    .filter(function(c){return c.checked && !selDivSet[c.dataset.div];})
-    .map(function(c){return c.value;});
+  var teams=qsa('#g-matches .teamchk').filter(function(c){return c.checked;}).map(function(c){return c.value;});
   var et=qsa('#g-events .etchk').filter(function(c){return c.checked;}).map(function(c){return c.value;});
   var etTotal=qsa('#g-events .etchk').length;
-  return {divs:divs, teams:teams, et:et, allEt:(etTotal>0 && et.length===etTotal),
+  var rl=qsa('#g-rent .rlchk').filter(function(c){return c.checked;}).map(function(c){return c.value;});
+  var rlTotal=qsa('#g-rent .rlchk').length;
+  return {teams:teams,
+          et:et, allEt:(etTotal>0 && et.length===etTotal),
+          rl:rl, allRl:(rlTotal>0 && rl.length===rlTotal),
           hide:cHide?cHide.checked:false};
 }
 
 function inSubscription(r, s){
-  var any = s.divs.length || s.teams.length || s.et.length;
+  var any = s.teams.length || s.et.length || s.rl.length;
   if(!any) return true;                       // 何も選ばなければ全部
   if(r.k==='p') return s.et.indexOf(r.et)>=0;
-  if(s.divs.indexOf(r.dv)>=0) return true;
+  if(r.k==='r') return s.rl.indexOf(r.et)>=0;
   return s.teams.indexOf(r.a)>=0 || s.teams.indexOf(r.h)>=0;
 }
 
@@ -485,8 +610,9 @@ function render(){
     if(kw && (r.a+' '+r.h).toLowerCase().indexOf(kw)<0) continue;
     n++;
     var badge = r.n ? '<span class="delay">延期</span>' : '';
-    var mu = r.k==='p' ? esc(r.a) : esc(r.a)+'<span class="vs">vs</span>'+esc(r.h);
-    var cat = r.k==='p' ? esc(r.et||'イベント') : esc(r.dv);
+    var mu = r.k==='m' ? esc(r.a)+'<span class="vs">vs</span>'+esc(r.h) : esc(r.a);
+    var cat = r.k==='m' ? esc(r.dv)
+            : (r.k==='r' ? '<span class="rtag">個人</span>'+esc(r.et||'') : esc(r.et||'イベント'));
     var we = (wday(r.d)===0||wday(r.d)===6) ? ' class="we"' : '';
     html += '<tr'+we+'><td class="dt">'+fmtDate(r.d)+'</td><td class="tm">'+r.s+'–'+r.e
           + '</td><td class="match">'+badge+mu+'</td><td class="cat">'+cat+'</td></tr>';
@@ -501,10 +627,11 @@ function buildFeed(s){
   if(!FEED) return '';
   var base = FEED.replace(/\/+$/,'') + '/calendar.ics';
   var p=[];
-  if(s.divs.length)  p.push('divs='+s.divs.map(encodeURIComponent).join(','));
   if(s.teams.length) p.push('teams='+s.teams.map(encodeURIComponent).join(','));
   if(s.et.length){ if(s.allEt) p.push('events=1');
                    else p.push('etypes='+s.et.map(encodeURIComponent).join(',')); }
+  if(s.rl.length){ if(s.allRl) p.push('rent=1');
+                   else p.push('rlabels='+s.rl.map(encodeURIComponent).join(',')); }
   if(s.hide) p.push('hide=1');
   return base + (p.length ? '?'+p.join('&') : '');
 }
@@ -515,45 +642,22 @@ function updateFeed(s){
   feedEl.dataset.url = url;
 }
 
-// ---- 親↔子チェックの連動（tri-state）----
-function syncDivFromTeams(div){
-  var teams=qsa('#g-matches .teamchk[data-div="'+cssq(div)+'"]');
-  var divc=document.querySelector('#g-matches .divchk[data-div="'+cssq(div)+'"]');
-  if(!divc) return;
-  var on=teams.filter(function(c){return c.checked;}).length;
-  divc.checked = on===teams.length && teams.length>0;
-  divc.indeterminate = on>0 && on<teams.length;
+// ---- 親（全選択）↔子チェックの連動（tri-state）----
+function syncParent(parent, sel){
+  if(!parent) return;
+  var e=qsa(sel), on=e.filter(function(c){return c.checked;}).length;
+  parent.checked = on===e.length && e.length>0;
+  parent.indeterminate = on>0 && on<e.length;
 }
-function cssq(s){return String(s).replace(/["\\]/g,'\\$&');}
-function syncAllMatches(){
-  if(!allMatches) return;
-  var d=qsa('#g-matches .divchk');
-  var on=d.filter(function(c){return c.checked;}).length;
-  var ind=d.some(function(c){return c.indeterminate;});
-  allMatches.checked = on===d.length && d.length>0;
-  allMatches.indeterminate = !allMatches.checked && (on>0 || ind);
-}
-function syncAllEvents(){
-  if(!allEvents) return;
-  var e=qsa('#g-events .etchk');
-  var on=e.filter(function(c){return c.checked;}).length;
-  allEvents.checked = on===e.length && e.length>0;
-  allEvents.indeterminate = on>0 && on<e.length;
-}
-
 function onChange(t){
-  if(t===allMatches){
-    qsa('#g-matches .divchk,#g-matches .teamchk').forEach(function(c){c.checked=allMatches.checked;c.indeterminate=false;});
-  } else if(t===allEvents){
+  if(t===allEvents){
     qsa('#g-events .etchk').forEach(function(c){c.checked=allEvents.checked;});
-  } else if(t.classList.contains('divchk')){
-    var div=t.dataset.div;
-    qsa('#g-matches .teamchk[data-div="'+cssq(div)+'"]').forEach(function(c){c.checked=t.checked;});
-    t.indeterminate=false; syncAllMatches();
-  } else if(t.classList.contains('teamchk')){
-    syncDivFromTeams(t.dataset.div); syncAllMatches();
+  } else if(t===allRent){
+    qsa('#g-rent .rlchk').forEach(function(c){c.checked=allRent.checked;});
   } else if(t.classList.contains('etchk')){
-    syncAllEvents();
+    syncParent(allEvents,'#g-events .etchk');
+  } else if(t.classList.contains('rlchk')){
+    syncParent(allRent,'#g-rent .rlchk');
   }
   render();
 }
@@ -561,8 +665,8 @@ function onChange(t){
 function bindAll(){
   document.addEventListener('change', function(e){
     var t=e.target;
-    if(t && (t===allMatches||t===allEvents||t.classList.contains('divchk')
-        ||t.classList.contains('teamchk')||t.classList.contains('etchk')
+    if(t && (t===allEvents||t===allRent||t.classList.contains('teamchk')
+        ||t.classList.contains('etchk')||t.classList.contains('rlchk')
         ||t===cHide||t===fMonth)) onChange(t);
   });
   // summary 内のチェックボックスは details の開閉を起こさない
@@ -605,6 +709,7 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
     # ---- 試合・イベントのテーブル用データ（最小粒度：1行1試合）----
     matches = next((s.events for s in specs if s.category == "overview"), [])
     programs = next((s.events for s in specs if s.category == "events"), [])
+    rentals = next((s.events for s in specs if s.category == "rentals"), [])
     rows = []
     for e in matches:
         away, home = (e.title.split(" vs ", 1) + [""])[:2]
@@ -613,13 +718,16 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
     for e in programs:
         rows.append({"d": e.date, "s": e.start, "e": e.end, "a": e.title, "h": "",
                      "dv": "", "n": 0, "k": "p", "et": event_type(e.title)})
+    for e in rentals:
+        rows.append({"d": e.date, "s": e.start, "e": e.end, "a": e.title, "h": "",
+                     "dv": "", "n": 0, "k": "r", "et": e.title})
     rows.sort(key=lambda r: (r["d"], r["s"]))
     data_json = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
 
     def esc(s: str) -> str:
         return _h.escape(s)
 
-    # 階層: 試合 → ディビジョン → チーム ／ 公式イベント → 種類
+    # 階層: 試合 → ディビジョン → チーム ／ 公式イベント → 種類 ／ 非公式・個人イベント → ラベル
     div_names = sorted({r["dv"] for r in rows if r["dv"]})
     months = sorted({r["d"][:7] for r in rows})
     team_by_div: dict[str, set[str]] = {}
@@ -629,8 +737,9 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
                 if t:
                     team_by_div.setdefault(r["dv"], set()).add(t)
     event_types = sorted({r["et"] for r in rows if r["k"] == "p" and r.get("et")})
+    rent_labels = sorted({r["et"] for r in rows if r["k"] == "r" and r.get("et")})
 
-    # 試合ツリー（ディビジョンごとに畳み、中にチーム）
+    # 試合ツリー：ディビジョンは見出しのみ（丸ごと購読は使わない）、チームだけ選択可
     match_tree = ""
     for d in div_names:
         teams = sorted(team_by_div.get(d, ()))
@@ -641,7 +750,6 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
         )
         match_tree += (
             f'<details class="tg"><summary>'
-            f'<input type="checkbox" class="divchk" data-div="{esc(d)}">'
             f'<span class="nm">{esc(d)}</span><span class="count">{len(teams)}チーム</span>'
             f'</summary><div class="chips">{team_chips}</div></details>'
         )
@@ -650,20 +758,30 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
         f'<label class="chip"><input type="checkbox" class="etchk" value="{esc(et)}">{esc(et)}</label>'
         for et in event_types
     )
+    rent_chips = "".join(
+        f'<label class="chip"><input type="checkbox" class="rlchk" value="{esc(rl)}">{esc(rl)}</label>'
+        for rl in rent_labels
+    )
+    rent_cat = f"""
+  <details class="cat">
+    <summary><input type="checkbox" id="all-rent"><span class="nm">非公式・個人イベント</span>
+      <span class="count">{len(rent_labels)}件</span></summary>
+    <div class="catbody chips" id="g-rent">{rent_chips}</div>
+  </details>""" if rent_labels else ""
     month_opts = "".join(f'<option value="{m}">{m[:4]}/{m[5:7]}</option>' for m in months)
 
     filter_ui = f"""
 <div class="fpanel">
   <details class="cat" open>
-    <summary><input type="checkbox" id="all-matches"><span class="nm">試合</span>
-      <span class="count">{len(div_names)}ディビジョン</span></summary>
+    <summary><span class="nm">試合</span>
+      <span class="count">チームを選択（{len(div_names)}ディビジョン）</span></summary>
     <div class="catbody" id="g-matches">{match_tree}</div>
   </details>
   <details class="cat">
     <summary><input type="checkbox" id="all-events"><span class="nm">公式イベント</span>
       <span class="count">{len(event_types)}種類</span></summary>
     <div class="catbody chips" id="g-events">{event_chips}</div>
-  </details>
+  </details>{rent_cat}
   <div class="fgroup viewopts"><div class="flabel">表示オプション（購読には影響しません）</div>
     <div class="frow">
       <label class="chip"><input type="checkbox" id="c-hide"> 延期を隠す</label>
@@ -682,8 +800,8 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
     if feed_url:
         subscribe_panel = f"""
 <h2 class="sec">選択した内容を Google カレンダーに購読</h2>
-<p class="sub">上でチェックした<b>ディビジョン・チーム・イベント・延期</b>がそのまま1本のURLになります
-（月・キーワードは表の閲覧用で購読には反映されません）。何も選ばなければ全試合＋イベントです。</p>
+<p class="sub">上でチェックした<b>チーム・公式イベント・非公式/個人イベント・延期</b>がそのまま1本のURLになります
+（月・キーワードは表の閲覧用で購読には反映されません）。何も選ばなければ全部です。</p>
 <div class="subbox">
   <code id="feedurl"></code>
   <div class="subbtns">
@@ -714,7 +832,7 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
 <body><div class="wrap">
 <h1>MHL スケジュール カレンダー</h1>
 <p class="sub">Misconduct Hockey League {season_no}期 / 最終更新 {stamp}<br>
-ディビジョン・チーム・月・延期で絞り込めます。選んだ内容はそのまま Google カレンダーに購読できます。</p>
+チーム・公式イベント・非公式/個人イベントで絞り込めます。選んだ内容はそのまま Google カレンダーに購読できます。</p>
 {filter_ui}
 {subscribe_panel}
 <p class="foot">データ元: <a href="{esc(BASE)}">misconduct.co.jp</a>
@@ -766,6 +884,7 @@ def build_calendars(events: list[Event]) -> list[CalSpec]:
     """出力する .ics の仕様一覧を返す。"""
     matches = [e for e in events if e.kind == "match"]
     programs = [e for e in events if e.kind == "program"]
+    rentals = [e for e in events if e.kind == "rental"]
 
     specs: list[CalSpec] = [CalSpec("all.ics", "MHL 全試合", matches, "overview")]
 
@@ -786,6 +905,8 @@ def build_calendars(events: list[Event]) -> list[CalSpec]:
 
     if programs:
         specs.append(CalSpec("events.ics", "MHL イベント・クリニック", programs, "events"))
+    if rentals:
+        specs.append(CalSpec("rentals.ics", "非公式・個人イベント", rentals, "rentals"))
     return specs
 
 
@@ -798,6 +919,7 @@ def write_feed(out: Path, specs: list[CalSpec], season_no: int,
     """
     matches = next((s.events for s in specs if s.category == "overview"), [])
     programs = next((s.events for s in specs if s.category == "events"), [])
+    rentals = next((s.events for s in specs if s.category == "rentals"), [])
     items = []
     for e in matches:
         away, home = (e.title.split(" vs ", 1) + [""])[:2]
@@ -807,6 +929,10 @@ def write_feed(out: Path, specs: list[CalSpec], season_no: int,
     for e in programs:
         items.append({"dv": "", "a": e.title, "h": "", "k": "p", "n": 0,
                       "et": event_type(e.title),
+                      "ev": render_vevent(e, location, dtstamp)})
+    for e in rentals:
+        items.append({"dv": "", "a": e.title, "h": "", "k": "r", "n": 0,
+                      "et": e.title,
                       "ev": render_vevent(e, location, dtstamp)})
     feed = {
         "season": season_no,

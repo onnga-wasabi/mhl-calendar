@@ -9,8 +9,10 @@
 //   teams  … カンマ区切りのチーム名（URLエンコード）。away/home どちらでも一致
 //   events … 1 で公式イベントを全種類含める
 //   etypes … カンマ区切りのイベント種類（例 クリニック,Drop in Hockey）。events=1 の下位指定
+//   rent   … 1 で非公式・個人イベント（レンタル黄色）を全部含める
+//   rlabels… カンマ区切りの非公式ラベル（例 WSJ,Next World）。rent=1 の下位指定
 //   hide   … 1 で延期の試合を除外
-//   （何も指定しなければ全試合＋全イベント）
+//   （何も指定しなければ全試合＋全イベント＋全非公式）
 //
 // フィルタの意味はページ側 index.html の inSubscription() と一致させている。
 
@@ -42,12 +44,15 @@ export default {
     const feed = await res.json();
 
     const q = url.searchParams;
+    const truthy = (k) => q.get(k) === "1" || q.get(k) === "true";
     const divs = new Set(parseList(q.get("divs")));
     const teams = new Set(parseList(q.get("teams")));
     const etypes = new Set(parseList(q.get("etypes")));
-    const events = q.get("events") === "1" || q.get("events") === "true";
-    const hide = q.get("hide") === "1" || q.get("hide") === "true";
-    const any = divs.size || teams.size || etypes.size || events;
+    const rlabels = new Set(parseList(q.get("rlabels")));
+    const events = truthy("events");
+    const rent = truthy("rent");
+    const hide = truthy("hide");
+    const any = divs.size || teams.size || etypes.size || rlabels.size || events || rent;
 
     const blocks = [];
     for (const it of feed.events) {
@@ -55,6 +60,7 @@ export default {
       let ok;
       if (!any) ok = true;
       else if (it.k === "p") ok = events || etypes.has(it.et);
+      else if (it.k === "r") ok = rent || rlabels.has(it.et);
       else ok = divs.has(it.dv) || teams.has(it.a) || teams.has(it.h);
       if (ok) blocks.push(it.ev);
     }
