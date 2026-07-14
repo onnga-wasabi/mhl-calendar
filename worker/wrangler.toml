@@ -1,0 +1,7 @@
+name = "mhl-calendar"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# feed.json の場所（GitHub Pages）。リポジトリ名やユーザー名を変えたらここも変える。
+[vars]
+FEED_JSON = "https://onnga-wasabi.github.io/mhl-calendar/feed.json"

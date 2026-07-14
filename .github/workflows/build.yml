@@ -26,11 +26,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Generate .ics + index.html
+      - name: Generate .ics + feed.json + index.html
+        env:
+          # Worker をデプロイしたら Settings→Variables に FEED_URL を登録すると購読パネルが有効化される
+          FEED_URL: ${{ vars.FEED_URL }}
         run: |
-          # 公開先 URL を index.html の購読リンクに埋め込む
+          # 公開先 URL を index.html に埋め込む
           BASE_URL="https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
-          python3 mhl_calendar.py --out site --base-url "$BASE_URL"
+          python3 mhl_calendar.py --out site --base-url "$BASE_URL" --feed-url "$FEED_URL"
 
       - uses: actions/upload-pages-artifact@v3
         with:

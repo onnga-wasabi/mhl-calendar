@@ -281,43 +281,50 @@ def _fold(line: str) -> str:
     return "\r\n".join(s.decode("utf-8") for s in out)
 
 
-def render_ics(events: list[Event], name: str, location: str, dtstamp: str) -> str:
+_ICS_HEADER = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//mhl-calendar//misconduct.co.jp//JA",
+    "CALSCALE:GREGORIAN",
+    "METHOD:PUBLISH",
+]
+
+
+def render_vevent(ev: Event, location: str, dtstamp: str) -> str:
+    """1 件の VEVENT ブロックを RFC5545 折り返し済みで返す（末尾改行なし）。"""
+    summary = ev.title
+    if ev.kind == "match" and ev.division:
+        summary = f"{ev.title}（{ev.division}）"
+    if ev.note:
+        summary = f"⚠{ev.note} {summary}"
+    desc_parts = []
+    if ev.number:
+        desc_parts.append(f"試合 #{ev.number}")
+    if ev.division:
+        desc_parts.append(f"ディビジョン: {ev.division}")
+    if ev.note:
+        desc_parts.append(ev.note)
+    desc_parts.append(ev.source)
     lines = [
-        "BEGIN:VCALENDAR",
-        "VERSION:2.0",
-        "PRODID:-//mhl-calendar//misconduct.co.jp//JA",
-        "CALSCALE:GREGORIAN",
-        "METHOD:PUBLISH",
-        f"X-WR-CALNAME:{_esc(name)}",
-        "X-WR-TIMEZONE:Asia/Tokyo",
+        "BEGIN:VEVENT",
+        f"UID:{ev.uid}",
+        f"DTSTAMP:{dtstamp}",
+        f"DTSTART:{_dt_utc(ev.date, ev.start)}",
+        f"DTEND:{_dt_utc(ev.date, ev.end)}",
+        f"SUMMARY:{_esc(summary)}",
+        f"DESCRIPTION:{_esc(' / '.join(desc_parts))}",
+        f"LOCATION:{_esc(location)}",
+        "END:VEVENT",
     ]
-    for ev in events:
-        summary = ev.title
-        if ev.kind == "match" and ev.division:
-            summary = f"{ev.title}（{ev.division}）"
-        if ev.note:
-            summary = f"⚠{ev.note} {summary}"
-        desc_parts = []
-        if ev.number:
-            desc_parts.append(f"試合 #{ev.number}")
-        if ev.division:
-            desc_parts.append(f"ディビジョン: {ev.division}")
-        if ev.note:
-            desc_parts.append(ev.note)
-        desc_parts.append(ev.source)
-        lines += [
-            "BEGIN:VEVENT",
-            f"UID:{ev.uid}",
-            f"DTSTAMP:{dtstamp}",
-            f"DTSTART:{_dt_utc(ev.date, ev.start)}",
-            f"DTEND:{_dt_utc(ev.date, ev.end)}",
-            f"SUMMARY:{_esc(summary)}",
-            f"DESCRIPTION:{_esc(' / '.join(desc_parts))}",
-            f"LOCATION:{_esc(location)}",
-            "END:VEVENT",
-        ]
-    lines.append("END:VCALENDAR")
-    return "\r\n".join(_fold(ln) for ln in lines) + "\r\n"
+    return "\r\n".join(_fold(ln) for ln in lines)
+
+
+def render_ics(events: list[Event], name: str, location: str, dtstamp: str) -> str:
+    lines = list(_ICS_HEADER) + [f"X-WR-CALNAME:{_esc(name)}", "X-WR-TIMEZONE:Asia/Tokyo"]
+    head = "\r\n".join(_fold(ln) for ln in lines)
+    body = "\r\n".join(render_vevent(ev, location, dtstamp) for ev in events)
+    parts = [head] + ([body] if body else []) + ["END:VCALENDAR"]
+    return "\r\n".join(parts) + "\r\n"
 
 
 INDEX_CSS = """
@@ -364,37 +371,85 @@ table#sched{border-collapse:collapse;width:100%;font-size:.88rem}
 #sched .delay{background:var(--accent);color:#fff;font-size:.7rem;padding:.05rem .35rem;border-radius:4px;margin-right:.3rem;white-space:nowrap}
 #sched tr.we .dt{color:var(--accent);font-weight:700}
 #sched .empty td{color:var(--muted);text-align:center;padding:1.5rem}
+.fpanel{border:1px solid var(--line);border-radius:12px;padding:.8rem 1rem;margin:.4rem 0 1rem;background:var(--card)}
+.fgroup{padding:.5rem 0;border-bottom:1px solid var(--line)}
+.fgroup:last-child{border-bottom:none}
+.flabel{font-size:.78rem;font-weight:700;color:var(--muted);margin-bottom:.4rem;letter-spacing:.02em}
+.chips{display:flex;flex-wrap:wrap;gap:.35rem}
+.chip{display:inline-flex;align-items:center;gap:.3rem;font-size:.82rem;padding:.3rem .6rem;border:1px solid var(--line);border-radius:999px;cursor:pointer;user-select:none;background:var(--bg)}
+.chip:hover{border-color:var(--accent)}
+.chip:has(input:checked){background:var(--accent);color:#fff;border-color:var(--accent)}
+.chip input{margin:0}
+.frow{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+.frow select,.frow input[type=text]{font:inherit;font-size:.85rem;padding:.35rem .55rem;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
+details.tg{margin:.25rem 0}
+details.tg>summary{cursor:pointer;font-size:.85rem;font-weight:600;padding:.25rem 0}
+details.tg>summary .count{color:var(--muted);font-weight:400}
+details.tg .chips{padding:.4rem 0 .6rem .6rem}
+.subbox{border:1px solid var(--line);border-radius:12px;padding:.9rem 1rem;background:var(--card);margin:.5rem 0 1rem}
+.subbox code#feedurl{display:block;word-break:break-all;font-size:.82rem;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.6rem .7rem;color:var(--fg);margin-bottom:.7rem}
+.subbtns{display:flex;gap:.6rem;flex-wrap:wrap}
+.copy2,.gcopen{font:inherit;font-size:.85rem;font-weight:600;padding:.5rem .9rem;border-radius:8px;cursor:pointer;text-decoration:none;white-space:nowrap}
+.copy2{background:var(--accent);color:#fff;border:1px solid var(--accent)}
+.copy2:hover{opacity:.85}
+.copy2.done{background:transparent;color:var(--accent)}
+.gcopen{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+.gcopen:hover{background:var(--accent);color:#fff}
 """
 
-# フィルタ＋テーブル描画＋コピーの JS。__DATA__ を試合データ JSON に置換して埋め込む。
+# フィルタ＋テーブル描画＋購読URL生成の JS。__DATA__ を試合データ JSON に置換して埋め込む。
+# FEED（フィードのベースURL）は別途 `var FEED=...` を前置きして注入する。
 INDEX_JS = r"""
 var DATA = __DATA__;
+if(typeof FEED==='undefined') var FEED='';
 var WD = ['日','月','火','水','木','金','土'];
 function esc(s){return String(s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
 function wday(d){var p=d.split('-');return new Date(+p[0],+p[1]-1,+p[2]).getDay();}
 function fmtDate(d){var p=d.split('-');return p[1]+'/'+p[2]+' ('+WD[wday(d)]+')';}
+function checkedVals(sel){return Array.prototype.slice.call(document.querySelectorAll(sel))
+  .filter(function(x){return x.checked;}).map(function(x){return x.value;});}
 
-var fDiv=document.getElementById('f-div'),
-    fTeam=document.getElementById('f-team'),
+var gDiv=document.getElementById('g-div'),
+    gTeam=document.getElementById('g-team'),
+    cEvents=document.getElementById('c-events'),
+    cHide=document.getElementById('c-hide'),
     fMonth=document.getElementById('f-month'),
-    fHide=document.getElementById('f-hide'),
+    fKw=document.getElementById('f-kw'),
     tbody=document.getElementById('rows'),
-    count=document.getElementById('count');
+    count=document.getElementById('count'),
+    feedEl=document.getElementById('feedurl');
+
+function selection(){
+  return {
+    divs: checkedVals('#g-div input'),
+    teams: checkedVals('#g-team input'),
+    events: cEvents ? cEvents.checked : false,
+    hide: cHide ? cHide.checked : false
+  };
+}
+
+// 購読対象（div/team/events/hide のみ。月・キーワードは含めない）に一致するか
+function inSubscription(r, s){
+  var any = s.divs.length || s.teams.length || s.events;
+  if(!any) return true;                       // 何も選ばなければ全部
+  if(r.k==='p') return s.events;
+  if(s.divs.indexOf(r.dv)>=0) return true;
+  if(s.teams.indexOf(r.a)>=0 || s.teams.indexOf(r.h)>=0) return true;
+  return false;
+}
 
 function render(){
-  var dv=fDiv.value, tm=fTeam.value.trim().toLowerCase(), mo=fMonth.value, hide=fHide.checked;
+  var s=selection(), mo=fMonth?fMonth.value:'', kw=fKw?fKw.value.trim().toLowerCase():'';
   var html='', n=0;
   for(var i=0;i<DATA.length;i++){
     var r=DATA[i];
-    if(dv==='__ev__'){ if(r.k!=='p') continue; }
-    else if(dv){ if(r.dv!==dv) continue; }
+    if(!inSubscription(r,s)) continue;
+    if(s.hide && r.n) continue;
     if(mo && r.d.slice(0,7)!==mo) continue;
-    if(hide && r.n) continue;
-    if(tm && (r.a+' '+r.h).toLowerCase().indexOf(tm)<0) continue;
+    if(kw && (r.a+' '+r.h).toLowerCase().indexOf(kw)<0) continue;
     n++;
     var badge = r.n ? '<span class="delay">延期</span>' : '';
-    var mu = r.k==='p' ? esc(r.a)
-           : esc(r.a)+'<span class="vs">vs</span>'+esc(r.h);
+    var mu = r.k==='p' ? esc(r.a) : esc(r.a)+'<span class="vs">vs</span>'+esc(r.h);
     var cat = r.k==='p' ? 'イベント' : esc(r.dv);
     var we = (wday(r.d)===0||wday(r.d)===6) ? ' class="we"' : '';
     html += '<tr'+we+'><td class="dt">'+fmtDate(r.d)+'</td><td class="tm">'+r.s+'–'+r.e
@@ -403,65 +458,65 @@ function render(){
   if(!n) html='<tr class="empty"><td colspan="4">該当する試合・イベントがありません</td></tr>';
   tbody.innerHTML=html;
   count.textContent=n+' 件';
+  updateFeed(s);
 }
-[fDiv,fTeam,fMonth,fHide].forEach(function(el){el.addEventListener('input',render);});
-var reset=document.getElementById('f-reset');
-if(reset) reset.addEventListener('click',function(){fDiv.value='';fTeam.value='';fMonth.value='';fHide.checked=false;render();});
-render();
 
-document.querySelectorAll('button.copy').forEach(function(b){
-  b.addEventListener('click',function(){
-    var url=b.dataset.url, label=b.textContent;
-    function done(){ b.textContent='✓ コピーしました'; b.classList.add('done');
-      setTimeout(function(){ b.textContent=label; b.classList.remove('done'); },1500); }
+function buildFeed(s){
+  if(!FEED) return '';
+  var base = FEED.replace(/\/+$/,'') + '/calendar.ics';
+  var p=[];
+  if(s.divs.length)  p.push('divs='+s.divs.map(encodeURIComponent).join(','));
+  if(s.teams.length) p.push('teams='+s.teams.map(encodeURIComponent).join(','));
+  if(s.events) p.push('events=1');
+  if(s.hide)   p.push('hide=1');
+  return base + (p.length ? '?'+p.join('&') : '');
+}
+function updateFeed(s){
+  if(!feedEl) return;
+  var url=buildFeed(s);
+  feedEl.textContent = url || '(フィード未設定)';
+  feedEl.dataset.url = url;
+}
+
+function bindAll(){
+  document.addEventListener('change', function(e){
+    if(e.target && e.target.matches('#g-div input,#g-team input,#c-events,#c-hide,#f-month')) render();
+  });
+  if(fKw) fKw.addEventListener('input', render);
+  var reset=document.getElementById('f-reset');
+  if(reset) reset.addEventListener('click', function(){
+    checkedVals('#g-div input,#g-team input');  // no-op read
+    Array.prototype.slice.call(document.querySelectorAll('#g-div input,#g-team input'))
+      .forEach(function(x){x.checked=false;});
+    if(cEvents)cEvents.checked=false; if(cHide)cHide.checked=false;
+    if(fMonth)fMonth.value=''; if(fKw)fKw.value='';
+    render();
+  });
+}
+
+function attachCopy(btn, getUrl){
+  if(!btn) return;
+  btn.addEventListener('click', function(){
+    var url=getUrl(), label=btn.textContent;
+    if(!url) return;
+    function done(){ btn.textContent='✓ コピーしました'; btn.classList.add('done');
+      setTimeout(function(){ btn.textContent=label; btn.classList.remove('done'); },1500); }
     if(navigator.clipboard&&navigator.clipboard.writeText){
       navigator.clipboard.writeText(url).then(done,function(){ window.prompt('このURLをコピーしてください',url); });
     } else { window.prompt('このURLをコピーしてください',url); }
   });
-});
+}
+
+bindAll();
+attachCopy(document.getElementById('feed-copy'), function(){ return feedEl?feedEl.dataset.url:''; });
+render();
 """
 
 
 def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
-                dtstamp: str) -> None:
-    """購読用リンク一覧ページ（index.html）を書き出す。"""
+                dtstamp: str, feed_url: str = "") -> None:
+    """スケジュール表＋絞り込み＋『選択を購読』ページ（index.html）を書き出す。"""
     import html as _h
-
-    def link(fn: str) -> str:
-        return f"{base_url.rstrip('/')}/{fn}" if base_url else fn
-
-    def card(spec: CalSpec) -> str:
-        url = link(spec.filename)
-        # クリックでクリップボードにコピーするだけ（ダウンロードは発生させない）。
-        # 貼り付け先は Google カレンダーの「URLで追加」。
-        return (
-            f'<div class="card"><span class="name">{_h.escape(spec.name)}</span>'
-            f'<span class="count">{len(spec.events)} 件</span>'
-            f'<button class="copy" type="button" data-url="{_h.escape(url)}">購読URLをコピー</button>'
-            f"</div>"
-        )
-
-    # ---- 購読カード（テーブルの下に置く）----
-    overview = [s for s in specs if s.category in ("overview", "events")]
-    divisions = [s for s in specs if s.category == "division"]
-    teams = [s for s in specs if s.category == "team"]
-
-    sub_sections = ["".join(card(s) for s in overview)]
-    if divisions:
-        sub_sections.append('<h3 class="sec">ディビジョン別</h3>')
-        sub_sections.append("".join(card(s) for s in divisions))
-    if teams:
-        sub_sections.append('<h3 class="sec">チーム別</h3>'
-                            '<p class="sub">所属ディビジョンごとに畳んでいます。開いて選んでください。</p>')
-        by_div: dict[str, list[CalSpec]] = {}
-        for s in teams:
-            by_div.setdefault(s.division or "その他", []).append(s)
-        for div in sorted(by_div):
-            inner = "".join(card(s) for s in sorted(by_div[div], key=lambda s: s.name))
-            sub_sections.append(
-                f'<details><summary>{_h.escape(div)}'
-                f'<span class="count"> {len(by_div[div])} チーム</span></summary>{inner}</details>'
-            )
 
     # ---- 試合・イベントのテーブル用データ（最小粒度：1行1試合）----
     matches = next((s.events for s in specs if s.category == "overview"), [])
@@ -477,29 +532,85 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
     rows.sort(key=lambda r: (r["d"], r["s"]))
     data_json = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
 
+    # ディビジョン・月・チーム（部門ごと）
     div_names = sorted({r["dv"] for r in rows if r["dv"]})
-    div_opts = "".join(f'<option value="{_h.escape(d)}">{_h.escape(d)}</option>' for d in div_names)
     months = sorted({r["d"][:7] for r in rows})
-    month_opts = "".join(
-        f'<option value="{m}">{m[:4]}/{m[5:7]}</option>' for m in months
-    )
-    team_names = sorted({t for r in rows if r["k"] == "m" for t in (r["a"], r["h"]) if t})
-    team_opts = "".join(f'<option value="{_h.escape(t)}"></option>' for t in team_names)
+    team_by_div: dict[str, set[str]] = {}
+    for r in rows:
+        if r["k"] == "m":
+            for t in (r["a"], r["h"]):
+                if t:
+                    team_by_div.setdefault(r["dv"], set()).add(t)
 
-    filter_table = f"""
-<div class="filters">
-  <select id="f-div"><option value="">全ディビジョン</option>{div_opts}<option value="__ev__">イベントのみ</option></select>
-  <input type="text" id="f-team" list="teamlist" placeholder="チーム名で絞り込み">
-  <datalist id="teamlist">{team_opts}</datalist>
-  <select id="f-month"><option value="">全期間</option>{month_opts}</select>
-  <label><input type="checkbox" id="f-hide"> 延期を隠す</label>
-  <button type="button" class="reset" id="f-reset">クリア</button>
-  <span id="count"></span>
+    def esc(s: str) -> str:
+        return _h.escape(s)
+
+    div_checks = "".join(
+        f'<label class="chip"><input type="checkbox" value="{esc(d)}">{esc(d)}</label>'
+        for d in div_names
+    )
+    team_groups = ""
+    for d in div_names:
+        teams = sorted(team_by_div.get(d, ()))
+        inner = "".join(
+            f'<label class="chip"><input type="checkbox" value="{esc(t)}">{esc(t)}</label>'
+            for t in teams
+        )
+        team_groups += (
+            f'<details class="tg"><summary>{esc(d)}<span class="count"> {len(teams)}</span>'
+            f'</summary><div class="chips">{inner}</div></details>'
+        )
+    month_opts = "".join(f'<option value="{m}">{m[:4]}/{m[5:7]}</option>' for m in months)
+
+    filter_ui = f"""
+<div class="fpanel">
+  <div class="fgroup"><div class="flabel">ディビジョン</div>
+    <div class="chips" id="g-div">{div_checks}</div></div>
+  <div class="fgroup"><div class="flabel">チーム（部門ごと。開いて選択）</div>
+    <div id="g-team">{team_groups}</div></div>
+  <div class="fgroup"><div class="flabel">その他</div>
+    <div class="frow">
+      <label class="chip"><input type="checkbox" id="c-events"> イベントを含む</label>
+      <label class="chip"><input type="checkbox" id="c-hide"> 延期を隠す</label>
+      <select id="f-month"><option value="">全期間</option>{month_opts}</select>
+      <input type="text" id="f-kw" placeholder="キーワード（表のみ）">
+      <button type="button" class="reset" id="f-reset">すべてクリア</button>
+      <span id="count"></span>
+    </div></div>
 </div>
 <div class="tablewrap"><table id="sched">
 <thead><tr><th>日付</th><th>時刻</th><th>対戦 / 内容</th><th>区分</th></tr></thead>
 <tbody id="rows"></tbody></table></div>"""
 
+    # 「選択を購読」パネル。feed_url が未設定なら注意書きを出す。
+    if feed_url:
+        subscribe_panel = f"""
+<h2 class="sec">選択した内容を Google カレンダーに購読</h2>
+<p class="sub">上でチェックした<b>ディビジョン・チーム・イベント・延期</b>がそのまま1本のURLになります
+（月・キーワードは表の閲覧用で購読には反映されません）。何も選ばなければ全試合＋イベントです。</p>
+<div class="subbox">
+  <code id="feedurl"></code>
+  <div class="subbtns">
+    <button type="button" class="copy2" id="feed-copy">このURLをコピー</button>
+    <a class="gcopen" href="https://calendar.google.com/" target="_blank" rel="noopener">Googleカレンダーを開く</a>
+  </div>
+</div>
+<div class="how"><h2 style="font-size:1rem;color:var(--fg)">登録方法</h2>
+<ol>
+<li>フィルタで見たいディビジョン／チーム／イベントをチェック</li>
+<li>「このURLをコピー」を押す</li>
+<li>PCの Google カレンダー左「他のカレンダー ＋」→「<b>URL で追加</b>」に貼り付け</li>
+</ol>
+<p class="note">※「ダウンロード → インポート」はしないでください（更新されません）。かならず<b>「URL で追加」</b>で購読を。<br>
+反映は Google 側の都合で数時間〜1日ほど遅れます。延期の試合はタイトル先頭に <b>⚠延期</b> が付きます。
+スマホは一度PCで登録すれば同期されます。</p></div>"""
+    else:
+        subscribe_panel = """
+<h2 class="sec">選択した内容を購読（準備中）</h2>
+<p class="note">購読フィード（Cloudflare Worker）が未設定です。デプロイ後にフィードURLを設定すると、
+上の選択がそのまま購読URLになります。</p>"""
+
+    feed_js = "var FEED=" + json.dumps(feed_url) + ";\n"
     stamp = f"{dtstamp[:4]}-{dtstamp[4:6]}-{dtstamp[6:8]} {dtstamp[9:11]}:{dtstamp[11:13]} UTC"
     body = f"""<!doctype html><html lang="ja"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -507,25 +618,13 @@ def write_index(out: Path, specs: list[CalSpec], season_no: int, base_url: str,
 <body><div class="wrap">
 <h1>MHL スケジュール カレンダー</h1>
 <p class="sub">Misconduct Hockey League {season_no}期 / 最終更新 {stamp}<br>
-下の表で日程を確認できます。ディビジョン・チーム・月・延期で絞り込めます。</p>
-{filter_table}
-<h2 class="sec">Google カレンダーに購読する</h2>
-<p class="sub">見たい単位（全試合・ディビジョン・チーム・イベント）を Google カレンダーに<b>URLで追加</b>すると自動で最新に追従します。</p>
-{''.join(sub_sections)}
-<div class="how"><h2 style="font-size:1rem;color:var(--fg)">Google カレンダーへの登録方法</h2>
-<ol>
-<li>登録したい行の「<b>購読URLをコピー</b>」を押す（URLがコピーされます）</li>
-<li>PCで <a href="https://calendar.google.com/" target="_blank" rel="noopener">Google カレンダー</a> を開き、左側「<b>他のカレンダー</b>」の＋ →「<b>URL で追加</b>」</li>
-<li>コピーしたURLを貼り付けて「<b>カレンダーを追加</b>」</li>
-</ol>
-<p class="note">※「ダウンロード → インポート」はしないでください。インポートはその時点のコピーで<b>更新されません</b>。
-かならず上の手順の<b>「URL で追加」（購読）</b>で登録してください。<br>
-サイト更新への反映は Google 側の都合で数時間〜1日ほど遅れます。延期の試合はタイトル先頭に <b>⚠※延期</b> が付きます。<br>
-スマホアプリからは「URL で追加」ができないため、一度PCブラウザで登録すれば以後スマホにも同期されます。</p></div>
-<p class="foot">データ元: <a href="{_h.escape(BASE)}">misconduct.co.jp</a>
+ディビジョン・チーム・月・延期で絞り込めます。選んだ内容はそのまま Google カレンダーに購読できます。</p>
+{filter_ui}
+{subscribe_panel}
+<p class="foot">データ元: <a href="{esc(BASE)}">misconduct.co.jp</a>
 （非公式・個人利用向けの変換ツールです）</p>
 </div>
-<script>{INDEX_JS.replace("__DATA__", data_json)}</script>
+<script>{feed_js}{INDEX_JS.replace("__DATA__", data_json)}</script>
 </body></html>"""
     (out / "index.html").write_text(body, encoding="utf-8")
 
@@ -594,6 +693,36 @@ def build_calendars(events: list[Event]) -> list[CalSpec]:
     return specs
 
 
+def write_feed(out: Path, specs: list[CalSpec], season_no: int,
+               location: str, dtstamp: str) -> int:
+    """Cloudflare Worker が絞り込みに使う feed.json を書き出す。
+
+    各イベントに、フィルタ用フィールド（dv/a/h/k/n）と、
+    そのまま連結できる事前生成済み VEVENT ブロックを持たせる。
+    """
+    matches = next((s.events for s in specs if s.category == "overview"), [])
+    programs = next((s.events for s in specs if s.category == "events"), [])
+    items = []
+    for e in matches:
+        away, home = (e.title.split(" vs ", 1) + [""])[:2]
+        items.append({"dv": e.division, "a": away, "h": home, "k": "m",
+                      "n": 1 if e.note else 0,
+                      "ev": render_vevent(e, location, dtstamp)})
+    for e in programs:
+        items.append({"dv": "", "a": e.title, "h": "", "k": "p", "n": 0,
+                      "ev": render_vevent(e, location, dtstamp)})
+    feed = {
+        "season": season_no,
+        "dtstamp": dtstamp,
+        "calname": f"MHL {season_no}期",
+        "header": _ICS_HEADER + ["X-WR-TIMEZONE:Asia/Tokyo"],
+        "events": items,
+    }
+    (out / "feed.json").write_text(
+        json.dumps(feed, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    return len(items)
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -603,7 +732,10 @@ def main() -> int:
     ap.add_argument("--location", default="MHL TOKYO", help="LOCATION に入れる会場名")
     ap.add_argument("--base", default=BASE, help="サイトのベース URL")
     ap.add_argument("--base-url", default="",
-                    help="公開先の URL（例: https://user.github.io/repo）。index.html の購読リンクに使う")
+                    help="公開先の URL（例: https://user.github.io/repo）")
+    ap.add_argument("--feed-url", default="",
+                    help="Cloudflare Worker のベース URL（例: https://mhl.<sub>.workers.dev）。"
+                         "index.html の『選択を購読』に使う")
     ap.add_argument("--no-index", action="store_true", help="index.html を生成しない")
     args = ap.parse_args()
 
@@ -625,8 +757,10 @@ def main() -> int:
     for cat in ("overview", "division", "team", "events"):
         if by_cat.get(cat):
             print(f"  {cat:10} {by_cat[cat]:3d} calendars", file=sys.stderr)
+    n_feed = write_feed(out, specs, season_no, args.location, dtstamp)
+    print(f"  feed.json  {n_feed:3d} events", file=sys.stderr)
     if not args.no_index:
-        write_index(out, specs, season_no, args.base_url, dtstamp)
+        write_index(out, specs, season_no, args.base_url, dtstamp, args.feed_url)
         print("  index.html", file=sys.stderr)
     print(f"wrote {len(specs)} calendars to {out}/", file=sys.stderr)
     return 0
